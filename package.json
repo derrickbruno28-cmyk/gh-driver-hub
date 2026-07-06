@@ -1,0 +1,10 @@
+{
+  "name": "driver-management",
+  "version": "1.0.0",
+  "private": true,
+  "scripts": {
+    "dev": "npx serve public",
+    "deploy:firebase": "firebase deploy --only hosting",
+    "deploy:netlify": "netlify deploy --prod"
+  }
+}
