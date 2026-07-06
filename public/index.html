@@ -335,13 +335,7 @@ const NAV = [
   { id:'nmf',        icon:'🚫', label:'Not Moving Forward' },
   { id:'terminated', icon:'⛔', label:'Terminated / Removed' },
   { group: 'Admin' },
-  { id:'rsi',        icon:'🛡️', label:'RSI Insurance List' },
   { id:'checkcalls', icon:'☎️', label:'YOE & Check Calls' },
-  { id:'dqf',        icon:'🗃️', label:'DQF Files' },
-  { group: 'Safety' },
-  { id:'pointsmemo', icon:'📝', label:'Points Memo' },
-  { id:'violations', icon:'🚨', label:'Driver Violations' },
-  { id:'training',   icon:'🎓', label:'Safety Training' },
   { group: 'Reference' },
   { id:'policy', icon:'📖', label:'Policies & Pay (SOP)' },
 ];
@@ -426,8 +420,7 @@ function renderNav(){
     else if(n.id==='constraints') ct=c.constraints; else if(n.id==='roadtests') ct=c.roadtests;
     else if(n.id==='nmf') ct=c.nmf; else if(n.id==='terminated') ct=c.terminated;
     else if(n.id==='leads') ct=c.leads;
-    else if(n.id==='rsi') ct=c.rsiPending; else if(n.id==='checkcalls') ct=c.checkcalls;
-    else if(n.id==='dqf') ct=c.dqfIncomplete; else if(n.id==='violations') ct=c.violations;
+    else if(n.id==='checkcalls') ct=c.checkcalls;
     return `<div class="nav-item ${view===n.id?'active':''}" onclick="go('${n.id}')"><span class="ic">${n.icon}</span>${esc(n.label)}${ct!==''?`<span class="ct">${ct}</span>`:''}</div>`;
   }).join('');
 }
@@ -462,12 +455,7 @@ const TITLES = {
   terminated:['Terminated / Removed','Drivers no longer with the fleet'],
   leads:['Leads / Call Log','Recruiter outreach — log calls and convert to new hires'],
   policy:['Policies & Pay (SOP)','AST-002 — Company Driver Positions and Pay Stipulations'],
-  rsi:['RSI Insurance List','Insurance roster & the 30-day removal rule (owner: Shane)'],
-  checkcalls:['YOE & Check Calls','Sub-1-year drivers and daily check-call logs'],
-  dqf:['DQF Files','Driver Qualification File completion tracking'],
-  pointsmemo:['Points Memo','Monthly points memo status and blockers'],
-  violations:['Driver Violations','Violation log and performance roll-up'],
-  training:['Safety Training','Training catalog and per-driver completion (owner: Dayne)']
+  checkcalls:['YOE & Check Calls','Sub-1-year drivers and daily check-call logs']
 };
 function go(v){ view=v; searchQ=''; document.getElementById('search').value=''; renderNav(); render(); }
 function onSearch(v){ searchQ=v.toLowerCase(); render(); }
@@ -479,7 +467,7 @@ function render(){
   el.innerHTML = ({dashboard:vDash, master:vMaster, availability:vAvail, timeoff:vTimeoff, callouts:vCallouts,
     constraints:vConstraints, returns:vReturns, pairings:vPairings, solo:vSolo, programs:vPrograms,
     roadtests:vRoadTests, nmf:vNMF, terminated:vTerminated, leads:vLeads, policy:vPolicy,
-    rsi:vRSI, checkcalls:vCheckCalls, dqf:vDQF, pointsmemo:vPointsMemo, violations:vViolations, training:vTraining})[view]();
+    checkcalls:vCheckCalls})[view]();
   el.scrollTop=0;
 }
 
@@ -729,21 +717,6 @@ function vPolicy(){
 let rsiFilter='all', trainingView='A';
 function bar(pct){ const col = pct>=100?'var(--green)':pct>=60?'var(--amber)':'var(--red)'; return `<div style="display:flex;align-items:center;gap:8px"><div style="flex:1;height:8px;border-radius:6px;background:var(--surface2);overflow:hidden;min-width:80px"><div style="width:${pct}%;height:100%;background:${col}"></div></div><span style="font-size:12px;font-weight:600;min-width:34px">${pct}%</span></div>`; }
 
-function vRSI(){
-  const all=insuredDrivers();
-  const thisMonth=all.filter(pendingRemovalThisMonth).sort((a,b)=>(rsiRemovalDate(a)||'').localeCompare(rsiRemovalDate(b)||''));
-  const filters=[['all','All'],['Active','Active'],['Pending Removal','Pending Removal'],['Removed','Removed']];
-  const list=all.filter(matchQ).filter(d=>rsiFilter==='all'||rsiStatus(d)===rsiFilter).sort(byName);
-  const row=d=>{const st=rsiStatus(d);return `<tr onclick="openDriver('${d.id}')"><td>${whoCell(d)}</td><td><span class="tag">${esc(d.insuranceCarrier||'—')}</span></td><td><span class="badge ${RSI_STYLE[st]}">${st}</span></td><td>${fmtDate(d.lastDateWorked)}</td><td>${st==='Removed'?fmtDate(d.insuranceRemovedDate):'<span class="due '+dueClass(daysUntil(rsiRemovalDate(d)))+'">'+(rsiRemovalDate(d)?fmtDate(rsiRemovalDate(d)):'—')+'</span>'}</td><td onclick="event.stopPropagation()">${st==='Pending Removal'?`<button class="btn btn-sm" onclick="markInsuranceRemoved('${d.id}')">Mark Removed</button>`:''}</td></tr>`;};
-  return `<div style="background:var(--blue-soft);color:var(--blue);font-size:12.5px;padding:10px 14px;border-radius:10px;margin-bottom:18px">🛡️ Owned by <strong>Shane</strong> (history transferred from Josie). Terminating a driver auto-sets their insurance removal date to the <strong>following month</strong> — they stay "Pending Removal" until dropped.</div>
-  <div style="display:flex;gap:10px;margin-bottom:16px"><button class="btn btn-primary" onclick="exportRSI()">⤓ Export Monthly RSI File (CSV)</button></div>
-  <div class="card"><div class="card-head"><h3>🚩 Pending Removal This Month</h3><span class="ct">${thisMonth.length}</span></div>
-  <table><tbody>${thisMonth.length?thisMonth.map(d=>`<tr onclick="openDriver('${d.id}')"><td style="width:40%">${whoCell(d)}</td><td><span class="tag">${esc(d.insuranceCarrier||'—')}</span></td><td>Remove by <strong>${fmtDate(rsiRemovalDate(d))}</strong></td><td onclick="event.stopPropagation()" style="text-align:right"><button class="btn btn-sm" onclick="markInsuranceRemoved('${d.id}')">Mark Removed</button></td></tr>`).join(''):`<tr><td><div class="empty" style="padding:22px"><div class="ei">✓</div><p>Nobody to drop this month</p></div></td></tr>`}</tbody></table></div>
-  <div class="chips">${filters.map(([k,l])=>`<div class="chip ${rsiFilter===k?'active':''}" onclick="rsiFilter='${k}';render()">${esc(l)}</div>`).join('')}</div>
-  <div class="card"><div class="card-head"><h3>Insurance Roster</h3><span class="ct">${list.length}</span></div>
-  <table><thead><tr><th>Driver</th><th>Carrier</th><th>Status</th><th>Termination Date</th><th>Insurance Removal Date</th><th></th></tr></thead><tbody>${list.length?list.map(row).join(''):emptyRow(6)}</tbody></table></div>`;
-}
-
 function vCheckCalls(){
   const under=activeDrivers().filter(isUnderOneYear).filter(matchQ);
   const byLead={};
@@ -752,70 +725,6 @@ function vCheckCalls(){
   return `<div style="background:var(--amber-soft);color:var(--amber);font-size:12.5px;padding:10px 14px;border-radius:10px;margin-bottom:18px">☎️ Per Alfred's directive: Operations calls all sub-1-year drivers. Drivers auto-appear here from their CDL start date and auto-graduate at 1 year. Assign a US/FMT Lead in the driver profile.</div>
   ${under.length?order.map(lead=>{const list=byLead[lead].sort(byName);return `<div class="card"><div class="card-head"><h3>Lead: ${esc(lead)}</h3><span class="ct">${list.length}</span></div>
     <table><thead><tr><th>Driver</th><th>Experience</th><th>Last Check Call</th><th>Calls Logged</th><th></th></tr></thead><tbody>${list.map(d=>{const calls=(d.checkCalls||[]).slice().sort((a,b)=>(b.date||'').localeCompare(a.date||''));const last=calls[0];return `<tr onclick="openDriver('${d.id}')"><td>${whoCell(d)}</td><td><span class="badge b-amber">${expYrsLabel(d)}</span></td><td>${last?fmtDate(last.date)+(last.outcome?' · '+esc(last.outcome):''):'<span style="color:var(--text2)">No calls yet</span>'}</td><td style="text-align:center">${calls.length}</td><td onclick="event.stopPropagation()" style="text-align:right"><button class="btn btn-sm" onclick="quickCheckCall('${d.id}')">＋ Log Call</button></td></tr>`;}).join('')}</tbody></table></div>`;}).join(''):'<div class="empty"><div class="ei">✓</div><p>No drivers under 1 year of experience</p></div>'}`;
-}
-
-function vDQF(){
-  const a=activeDrivers();
-  const avg=a.length?Math.round(a.reduce((s,d)=>s+dqfPercent(d),0)/a.length):0;
-  const incomplete=a.filter(d=>dqfPercent(d)<100).sort((x,y)=>dqfPercent(x)-dqfPercent(y));
-  const expiring=a.filter(dqfExpiringSoon);
-  const list=a.filter(matchQ).sort((x,y)=>dqfPercent(x)-dqfPercent(y));
-  const stat=(l,n,c)=>`<div class="stat"><div class="lbl"><span class="dot" style="background:${c}"></span>${l}</div><div class="num">${n}</div></div>`;
-  return `<div class="stat-grid">
-    ${stat('Total DQF Completion',avg+'%','var(--primary)')}
-    ${stat('Fully Complete',a.filter(d=>dqfPercent(d)===100).length,'var(--green)')}
-    ${stat('Incomplete',incomplete.length,'var(--amber)')}
-    ${stat('Expiring ≤30 days',expiring.length,'var(--red)')}
-  </div>
-  ${expiring.length?`<div class="card"><div class="card-head"><h3>⏰ Expiring / Incomplete Roll-Up</h3><span class="ct">${expiring.length}</span></div><table><tbody>${expiring.map(d=>{const dq=d.dqf||{};const items=DQF_ITEMS.filter(it=>{const x=(dq[it]||{}).expiration;return x&&daysUntil(x)<=30;}).map(it=>`${esc(it)} (${fmtDate(dq[it].expiration)})`);return `<tr onclick="openDriver('${d.id}')"><td style="width:34%">${whoCell(d)}</td><td>${items.map(t=>`<span class="badge b-red" style="margin:2px">⏰ ${esc(t)}</span>`).join('')}</td></tr>`;}).join('')}</tbody></table></div>`:''}
-  <div class="card"><div class="card-head"><h3>Driver DQF Completion</h3><span class="ct">${list.length}</span></div>
-  <table><thead><tr><th>Driver</th><th style="width:34%">Completion</th><th>Verified</th><th>Flags</th></tr></thead><tbody>
-  ${list.length?list.map(d=>{const dq=d.dqf||{};const v=DQF_ITEMS.filter(it=>(dq[it]||{}).status==='Verified').length;return `<tr onclick="openDriver('${d.id}')"><td>${whoCell(d)}</td><td>${bar(dqfPercent(d))}</td><td>${v}/${DQF_ITEMS.length}</td><td>${dqfExpiringSoon(d)?'<span class="badge b-red">Expiring</span>':dqfPercent(d)<100?'<span class="badge b-amber">Incomplete</span>':'<span class="badge b-green">Complete</span>'}</td></tr>`;}).join(''):emptyRow(4)}
-  </tbody></table></div>`;
-}
-
-function vPointsMemo(){
-  const memos=pointsMemos.slice().sort((a,b)=>(b.month||'').localeCompare(a.month||''));
-  const fmtMonth=m=>{ if(!m) return '—'; const d=new Date(m+'-01T00:00:00'); return isNaN(d)?m:d.toLocaleDateString('en-US',{month:'long',year:'numeric'}); };
-  return `<div style="display:flex;gap:10px;margin-bottom:16px"><button class="btn btn-primary" onclick="openMemo(null)">＋ New Monthly Memo</button></div>
-  ${memos.length?memos.map(m=>{const blk=(m.blockers||[]).filter(b=>b.status!=='Resolved');return `<div class="card"><div class="card-head"><h3>${fmtMonth(m.month)}</h3><span class="badge ${m.status==='Completed'?'b-green':'b-amber'}">${esc(m.status||'In Progress')}</span><span class="ct">${(m.entries||[]).length} drivers</span>${blk.length?`<span class="badge b-red">${blk.length} blocker${blk.length>1?'s':''}</span>`:''}<button class="btn btn-sm" style="margin-left:auto" onclick="openMemo('${m.id}')">Open</button></div>
-    <table><thead><tr><th>Driver</th><th>Points</th><th>Violation</th></tr></thead><tbody>${(m.entries||[]).length?m.entries.map(e=>`<tr><td>${esc(e.driver)}</td><td><span class="badge b-amber">${esc(e.points)} pts</span></td><td>${esc(e.violation||'—')}</td></tr>`).join(''):`<tr><td colspan="3"><div class="empty" style="padding:16px"><p>No driver entries yet</p></div></td></tr>`}</tbody></table>
-    ${blk.length?`<div class="card-pad" style="border-top:1px solid var(--border)"><div style="font-size:11px;font-weight:700;text-transform:uppercase;color:var(--red);margin-bottom:8px">🚧 Blockers — held open until resolved</div>${blk.map(b=>`<div class="lrow" style="padding:8px 0"><div class="body"><div class="t">${esc(b.driver)}</div><div class="d">${esc(b.issue)}${b.notes?' · '+esc(b.notes):''}</div></div><span class="badge b-red">${esc(b.status||'Open')}</span></div>`).join('')}</div>`:''}</div>`;}).join(''):'<div class="empty"><div class="ei">📝</div><p>No memos yet — create the first monthly memo</p></div>'}`;
-}
-
-function vViolations(){
-  const a=activeDrivers();
-  const all=[]; a.forEach(d=>(d.violations||[]).forEach(v=>all.push({d,v})));
-  all.sort((x,y)=>(y.v.date||'').localeCompare(x.v.date||''));
-  const open=all.filter(x=>x.v.status!=='Resolved').length;
-  const repeat=a.filter(d=>(d.violations||[]).length>1).sort((x,y)=>(y.violations||[]).length-(x.violations||[]).length);
-  const filtered=all.filter(({d})=>matchQ(d));
-  const stat=(l,n,c)=>`<div class="stat"><div class="lbl"><span class="dot" style="background:${c}"></span>${l}</div><div class="num">${n}</div></div>`;
-  return `<div style="display:flex;gap:10px;margin-bottom:16px"><button class="btn btn-primary" onclick="quickViolation()">＋ Log Violation</button></div>
-  <div class="stat-grid">
-    ${stat('Total Violations',all.length,'var(--primary)')}
-    ${stat('Open',open,'var(--red)')}
-    ${stat('Resolved',all.length-open,'var(--green)')}
-    ${stat('Repeat Offenders',repeat.length,'var(--amber)')}
-  </div>
-  ${repeat.length?`<div class="card"><div class="card-head"><h3>🔁 Repeat Offenders</h3><span class="ct">${repeat.length}</span></div><table><tbody>${repeat.map(d=>`<tr onclick="openDriver('${d.id}')"><td style="width:50%">${whoCell(d)}</td><td><span class="badge b-red">${(d.violations||[]).length} violations</span></td><td style="text-align:right">${(d.violations||[]).filter(v=>v.status!=='Resolved').length} open</td></tr>`).join('')}</tbody></table></div>`:''}
-  <div class="card"><div class="card-head"><h3>Violation Log</h3><span class="ct">${filtered.length}</span></div>
-  <table><thead><tr><th>Driver</th><th>Date</th><th>Type</th><th>Severity</th><th>Source</th><th>Status</th></tr></thead><tbody>
-  ${filtered.length?filtered.map(({d,v})=>`<tr onclick="openDriver('${d.id}')"><td>${whoCell(d)}</td><td>${fmtDate(v.date)}</td><td>${esc(v.type||'—')}</td><td><span class="badge ${VIO_SEV_STYLE[v.severity]||'b-slate'}">${esc(v.severity||'—')}</span></td><td>${esc(v.source||'—')}</td><td><span class="badge ${VIO_STATUS_STYLE[v.status]||'b-slate'}">${esc(v.status||'Open')}</span></td></tr>`).join(''):emptyRow(6)}
-  </tbody></table></div>`;
-}
-
-function vTraining(){
-  const a=activeDrivers().filter(matchQ);
-  const chips=`<div class="chips"><div class="chip ${trainingView==='A'?'active':''}" onclick="trainingView='A';render()">View A — Pending per Driver</div><div class="chip ${trainingView==='B'?'active':''}" onclick="trainingView='B';render()">View B — Drivers per Topic</div></div>`;
-  const head=`<div style="background:var(--green-soft);color:var(--green);font-size:12.5px;padding:10px 14px;border-radius:10px;margin-bottom:16px">🎓 Dayne's audit section. One dataset, two views. Overdue items are flagged for follow-up.</div>
-  <div style="display:flex;gap:10px;margin-bottom:14px"><button class="btn" onclick="openTrainingCatalog()">⚙ Manage Catalog (${trainings.length})</button></div>${chips}`;
-  if(!trainings.length) return head+'<div class="empty"><div class="ei">🎓</div><p>No training topics yet — add some in Manage Catalog</p></div>';
-  if(trainingView==='A'){
-    return head+a.map(d=>{const pend=trainings.filter(t=>{const s=trainStatus(d,t.id);return s&&s!=='Completed';});if(!pend.length)return '';return `<div class="card"><div class="card-head"><h3 style="font-size:13.5px">${esc(fullName(d))}</h3><span class="ct">${pend.length} pending</span></div><table><tbody>${pend.map(t=>{const s=trainStatus(d,t.id);const tt=(d.training||{})[t.id]||{};return `<tr onclick="openDriver('${d.id}')"><td style="width:60%">${esc(t.title)}</td><td><span class="badge ${TRAIN_STYLE[s]}">${s}</span></td><td style="text-align:right">${tt.dueDate?'Due '+fmtDate(tt.dueDate):''}</td></tr>`;}).join('')}</tbody></table></div>`;}).join('')||'<div class="empty"><div class="ei">✓</div><p>Everyone is caught up</p></div>';
-  } else {
-    return head+trainings.map(t=>{const pend=a.filter(d=>{const s=trainStatus(d,t.id);return s&&s!=='Completed';});return `<div class="card"><div class="card-head"><h3 style="font-size:13.5px">${esc(t.title)}</h3><span class="ct">${pend.length} pending</span></div><table><tbody>${pend.length?pend.map(d=>{const s=trainStatus(d,t.id);const tt=(d.training||{})[t.id]||{};return `<tr onclick="openDriver('${d.id}')"><td style="width:60%">${whoCell(d)}</td><td><span class="badge ${TRAIN_STYLE[s]}">${s}</span></td><td style="text-align:right">${tt.dueDate?'Due '+fmtDate(tt.dueDate):''}</td></tr>`;}).join(''):`<tr><td><div class="empty" style="padding:16px"><p>All drivers complete</p></div></td></tr>`}</tbody></table></div>`;}).join('');
-  }
 }
 
 /* ---------- Driver modal ---------- */
