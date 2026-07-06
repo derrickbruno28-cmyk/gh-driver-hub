@@ -1475,9 +1475,9 @@ function fbInit(){
     fbGate(true);
     firebase.auth().onAuthStateChanged(function(u){
       if(!u){ fb.user=null; fb.ready=false; fbGate(true); return; }
-      if(!/@ghlogisticsllc\.com$/i.test(u.email||'')){
+      if(!/@(ghlogisticsllc|ajgtransport)\.com$/i.test(u.email||'')){
         firebase.auth().signOut();
-        fbGate(true,'Access is limited to GH Logistics accounts. Please sign in with your @ghlogisticsllc.com work email (you used '+u.email+').');
+        fbGate(true,'Access is limited to GH Logistics and AJG Transport accounts. Please sign in with your @ghlogisticsllc.com or @ajgtransport.com work email (you used '+u.email+').');
         return;
       }
       fb.user=u;
