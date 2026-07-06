@@ -809,19 +809,6 @@ function openDriver(id){
         <div class="sub-list" id="calloutList"></div>
       </div>
 
-      <div class="sec-label">DQF — Driver Qualification File</div>
-      <div class="fld full"><div id="dqfPct" style="margin-bottom:10px"></div><div id="dqfList" class="dqf-grid"></div><div style="font-size:11px;color:var(--text2);margin-top:6px"><span style="color:var(--red)">*</span> expiration tracked (CDL & Med Card)</div></div>
-
-      <div class="sec-label">Violations</div>
-      <div class="fld full">
-        <div class="vio-add"><input id="v_date" type="date"><input id="v_type" placeholder="Type"><select id="v_sev">${VIO_SEVERITY.map(s=>`<option>${s}</option>`).join('')}</select><input id="v_source" placeholder="Source"><select id="v_status">${VIO_STATUS.map(s=>`<option>${s}</option>`).join('')}</select><button class="btn" onclick="addViolation()">Add</button></div>
-        <input id="v_notes" placeholder="Notes (optional)" style="margin-top:8px;width:100%;padding:8px 10px;border:1px solid var(--border);border-radius:9px;background:var(--bg);color:var(--text);font-size:13px">
-        <div class="sub-list" id="violationList"></div>
-      </div>
-
-      <div class="sec-label">Safety Training</div>
-      <div class="fld full"><div id="trainingList" class="sub-list"></div></div>
-
       <div class="sec-label">Check Calls (sub-1-year)</div>
       <div class="fld full">
         <div class="mini-add" style="grid-template-columns:1fr 1fr 1fr auto"><input id="cc_date" type="date"><input id="cc_caller" placeholder="Caller"><select id="cc_outcome">${CHECKCALL_OUTCOMES.map(o=>`<option>${o}</option>`).join('')}</select><button class="btn" onclick="addCheckCall()">Log</button></div>
@@ -844,7 +831,7 @@ function openDriver(id){
   </div>`;
   document.getElementById('overlay').classList.add('open');
   onClassChange(); onStatusChange(); renderConstraints(); renderSubLists(); renderDocs();
-  renderDQF(); renderViolations(); renderTraining(); renderCheckCallsModal();
+  renderCheckCallsModal();
 }
 function setDQFByIdx(i,key,val){ const item=DQF_ITEMS[i]; draftDQF[item]=draftDQF[item]||{}; draftDQF[item][key]=val; if(key==='status') renderDQF(); updateDqfPct(); }
 function updateDqfPct(){ const v=DQF_ITEMS.filter(it=>(draftDQF[it]||{}).status==='Verified').length; const el=document.getElementById('dqfPct'); if(el) el.innerHTML=bar(Math.round(v/DQF_ITEMS.length*100)); }
