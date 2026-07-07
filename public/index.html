@@ -853,7 +853,7 @@ function renderSubLists(){
   document.getElementById('timeoffList').innerHTML=draftTimeOff.map((t,i)=>`<div class="sub-item"><span>${fmtDate(t.start)} → ${fmtDate(t.end)} · ${esc(t.reason||'—')}</span><select onchange="draftTimeOff[${i}].status=this.value" style="margin-left:auto;padding:3px 6px;border-radius:7px;border:1px solid var(--border);background:var(--surface);color:var(--text);font-size:11.5px">${['Pending','Approved','Denied'].map(s=>`<option ${t.status===s?'selected':''}>${s}</option>`).join('')}</select><span class="si-x" onclick="draftTimeOff.splice(${i},1);renderSubLists()">✕</span></div>`).join('');
   document.getElementById('calloutList').innerHTML=draftCallouts.map((c,i)=>`<div class="sub-item">📵 ${fmtDate(c.date)} · ${esc(c.reason||'—')}<span class="si-x" onclick="draftCallouts.splice(${i},1);renderSubLists()">✕</span></div>`).join('');
 }
-function renderDocs(){ document.getElementById('docList').innerHTML=draftDocs.map((f,i)=>`<div class="doc"><span class="fi">${fileIcon(f.type)}</span><span class="dn">${esc(f.name)}</span><span class="ds">${fileSize(f.size||0)}</span><a href="${f.dataUrl}" download="${esc(f.name)}" title="Download">⬇</a><span class="rm" onclick="draftDocs.splice(${i},1);renderDocs()" title="Remove">✕</span></div>`).join('') || '<div style="font-size:12.5px;color:var(--text2);padding:4px">No documents uploaded</div>'; }
+function renderDocs(){ document.getElementById('docList').innerHTML=draftDocs.map((f,i)=>`<div class="doc"><span class="fi">${fileIcon(f.type)}</span><span class="dn">${esc(f.name)}</span><span class="ds">${fileSize(f.size||0)}</span><a href="${f.url||f.dataUrl||'#'}" download="${esc(f.name)}" target="_blank" rel="noopener" title="Download">⬇</a><span class="rm" onclick="draftDocs.splice(${i},1);renderDocs()" title="Remove">✕</span></div>`).join('') || '<div style="font-size:12.5px;color:var(--text2);padding:4px">No documents uploaded</div>'; }
 function onFiles(files){
   [...files].forEach(file=>{
     if(file.size>3*1048576){ toast(file.name+' is large (>3MB) — may not save'); }
@@ -1435,7 +1435,8 @@ function fbLoadSdk(cb){
   var urls=[
     'https://www.gstatic.com/firebasejs/10.12.2/firebase-app-compat.js',
     'https://www.gstatic.com/firebasejs/10.12.2/firebase-auth-compat.js',
-    'https://www.gstatic.com/firebasejs/10.12.2/firebase-firestore-compat.js'
+    'https://www.gstatic.com/firebasejs/10.12.2/firebase-firestore-compat.js',
+    'https://www.gstatic.com/firebasejs/10.12.2/firebase-storage-compat.js'
   ];
   var i=0;
   (function next(){
@@ -1472,6 +1473,7 @@ function fbInit(){
   fbLoadSdk(function(){
     fb.app=firebase.initializeApp(FIREBASE_CONFIG);
     fb.db=firebase.firestore();
+    try { fb.storage=firebase.storage(); } catch(e){ fb.storage=null; }
     fbGate(true);
     firebase.auth().onAuthStateChanged(function(u){
       if(!u){ fb.user=null; fb.ready=false; fbGate(true); return; }
@@ -1608,17 +1610,34 @@ function fbListen(){
   }));
 }
 
-/* cap uploads in cloud mode (Firestore 1MB/doc limit; Firebase Storage comes later) */
+/* Cloud mode: upload documents to Firebase Storage and store only a link
+   (keeps Firestore records under the 1MB limit and supports large files). */
 var _origOnFiles = onFiles;
 onFiles = function(files){
-  if(FIREBASE_CONFIG){
-    var ok=[].filter.call(files,function(f){
-      if(f.size>700*1024){ toast(f.name+' is over 700KB - larger files supported once cloud file storage is wired'); return false; }
-      return true;
+  var storage = null;
+  try { storage = fb.storage || (window.firebase && firebase.storage && firebase.storage()); } catch(e){ storage = null; }
+  /* Fall back to inline base64 when not signed in / storage unavailable */
+  if(!FIREBASE_CONFIG || !fb.user || !storage){ return _origOnFiles(files); }
+  [].forEach.call(files, function(file){
+    if(file.size > 25*1048576){ toast(file.name+' is too large (max 25MB)'); return; }
+    var safe = String(file.name).replace(/[^\w.\-]+/g,'_');
+    var path = 'driverDocs/'+Date.now()+'_'+Math.random().toString(36).slice(2,8)+'_'+safe;
+    toast('Uploading '+file.name+'…');
+    storage.ref().child(path).put(file).then(function(snap){
+      return snap.ref.getDownloadURL();
+    }).then(function(url){
+      draftDocs.push({ name:file.name, type:file.type, size:file.size, url:url, path:path });
+      renderDocs();
+      toast(file.name+' uploaded');
+    }).catch(function(e){
+      console.error(e);
+      var code = e && e.code;
+      var msg = code==='storage/unauthorized' ? 'blocked by Storage security rules'
+              : code==='storage/unknown'      ? 'cloud file storage may not be enabled for this project'
+              : (e && e.message ? e.message : 'upload failed');
+      toast(file.name+': '+msg);
     });
-    return _origOnFiles(ok);
-  }
-  return _origOnFiles(files);
+  });
 };
 
 fbInit();
