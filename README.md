@@ -4,7 +4,12 @@ A fleet and driver management web app for GH Logistics — driver roster, availa
 team pairings, recruitment pipeline, DQF/insurance tracking, safety violations, and
 company pay/policy reference.
 
-**Live site:** https://gh-driver-hub.netlify.app
+**Live site:** https://ghlogistics-driver-hub.web.app
+
+> Always share this `.web.app` link with the team. Google sign-in is pinned to
+> the same Firebase origin the app is served from, so opening the app from any
+> other address (e.g. the old `gh-driver-hub.netlify.app` link) can trigger a
+> "missing initial state" sign-in error caused by browser storage partitioning.
 
 ## Overview
 
@@ -35,31 +40,30 @@ no build step). It uses **Firebase** as its backend and falls back to browser
 
 ## Deployment
 
-Hosted on **Netlify** with continuous deployment from this repo.
+Hosted on **Firebase Hosting** (project `ghlogistics-driver-hub`). Serving the
+app and Google sign-in from the same Firebase origin is what keeps the sign-in
+flow working across Safari, Chrome, and Firefox.
 
-**To publish a change:** commit and push to `main` — Netlify builds and deploys
-automatically.
+**To publish a change:**
 
 ```bash
 git add .
 git commit -m "Describe your change"
 git push
+firebase deploy --only hosting   # or: npm run deploy:firebase
 ```
 
-The live site updates within a minute. Every change is versioned here, so any
-deploy can be rolled back from the Netlify dashboard or with `git revert`.
+Every change is versioned here, so any deploy can be rolled back from the
+Firebase console (Hosting → Release history) or with `git revert`.
 
 - **Publish directory:** `public`
 - **Build command:** none (static site)
-- **Branch:** `main`
+- **Canonical URL:** https://ghlogistics-driver-hub.web.app
 
-### Manual deploy (backup)
+### Legacy Netlify config
 
-If you ever need to deploy outside of the git flow:
-
-```bash
-netlify deploy --prod
-```
+`netlify.toml` is kept only for reference/backup. The team should use the
+`.web.app` URL; the Netlify address is being retired.
 
 ## Local preview
 

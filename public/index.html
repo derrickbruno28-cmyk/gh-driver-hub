@@ -1421,7 +1421,19 @@ load(); renderNav(); render();
 /* ================= Firebase Cloud Sync Layer =================
    Set FIREBASE_CONFIG to your project's web config to enable
    sign-in + shared cloud data. Leave as null for local-only mode. */
-var FIREBASE_CONFIG = { "apiKey": "AIzaSyCEYIIVS7laNfVojGRNQ7PczcnIlq8Kf9Y", "authDomain": "ghlogistics-driver-hub.firebaseapp.com", "projectId": "ghlogistics-driver-hub", "storageBucket": "ghlogistics-driver-hub.firebasestorage.app", "messagingSenderId": "654302789423", "appId": "1:654302789423:web:40e0582d084ab555d9abda" };
+var FIREBASE_CONFIG = { "apiKey": "AIzaSyCEYIIVS7laNfVojGRNQ7PczcnIlq8Kf9Y", "authDomain": "ghlogistics-driver-hub.web.app", "projectId": "ghlogistics-driver-hub", "storageBucket": "ghlogistics-driver-hub.firebasestorage.app", "messagingSenderId": "654302789423", "appId": "1:654302789423:web:40e0582d084ab555d9abda" };
+
+/* Google sign-in must run on the SAME origin the app is served from, or the
+   browser (Safari, and increasingly Chrome/Firefox) partitions storage between
+   the app and the sign-in popup and the flow dies with "missing initial state".
+   Firebase Hosting serves the auth handler on every hosting domain, so we point
+   authDomain at whichever Firebase domain actually loaded the page. This keeps
+   the popup same-site whether someone opens the .web.app or the .firebaseapp.com
+   URL. Off Firebase (e.g. a stale netlify.app link) we keep the canonical value. */
+(function(){
+  var h = (location.hostname || '').toLowerCase();
+  if (/(\.web\.app|\.firebaseapp\.com)$/.test(h)) { FIREBASE_CONFIG.authDomain = h; }
+})();
 
 var fb = { app:null, db:null, user:null, ready:false, pushTimer:null, snap:{drivers:{},recruits:{},leads:{},meta:{}}, unsub:[] };
 
