@@ -4,12 +4,19 @@ A fleet and driver management web app for GH Logistics — driver roster, availa
 team pairings, recruitment pipeline, DQF/insurance tracking, safety violations, and
 company pay/policy reference.
 
-**Live site:** https://ghlogistics-driver-hub.web.app
+**Live site:** https://ghlogistics-driver-hub.firebaseapp.com
 
-> Always share this `.web.app` link with the team. Google sign-in is pinned to
-> the same Firebase origin the app is served from, so opening the app from any
-> other address (e.g. the old `gh-driver-hub.netlify.app` link) can trigger a
-> "missing initial state" sign-in error caused by browser storage partitioning.
+> Always share this `.firebaseapp.com` link with the team. Google sign-in is
+> pinned to the same Firebase origin the app is served from, so opening the app
+> from another address triggers sign-in errors:
+> - the old `gh-driver-hub.netlify.app` link → "missing initial state" (storage
+>   partitioning), and
+> - the `.web.app` link → "Error 400: redirect_uri_mismatch", because Google's
+>   OAuth client only trusts the `.firebaseapp.com` sign-in handler by default.
+>
+> To also allow the `.web.app` URL, add
+> `https://ghlogistics-driver-hub.web.app/__/auth/handler` to the OAuth 2.0
+> client's **Authorized redirect URIs** in the Google Cloud console.
 
 ## Overview
 
@@ -66,12 +73,12 @@ Firebase console (Hosting → Release history) or with `git revert`.
 
 - **Publish directory:** `public`
 - **Build command:** none (static site)
-- **Canonical URL:** https://ghlogistics-driver-hub.web.app
+- **Canonical URL:** https://ghlogistics-driver-hub.firebaseapp.com
 
 ### Legacy Netlify config
 
 `netlify.toml` is kept only for reference/backup. The team should use the
-`.web.app` URL; the Netlify address is being retired.
+`.firebaseapp.com` URL; the Netlify address is being retired.
 
 ## Local preview
 
