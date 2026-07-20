@@ -44,12 +44,20 @@ Hosted on **Firebase Hosting** (project `ghlogistics-driver-hub`). Serving the
 app and Google sign-in from the same Firebase origin is what keeps the sign-in
 flow working across Safari, Chrome, and Firefox.
 
-**To publish a change:**
+**To publish a change:** commit and push to `main` — a GitHub Action
+(`.github/workflows/firebase-hosting-merge.yml`) deploys to Firebase Hosting
+automatically, just like the old Netlify flow.
 
 ```bash
 git add .
 git commit -m "Describe your change"
 git push
+```
+
+The action requires a one-time secret named `FIREBASE_SERVICE_ACCOUNT_GHLOGISTICS`
+(setup instructions are in the workflow file). To deploy by hand instead:
+
+```bash
 firebase deploy --only hosting   # or: npm run deploy:firebase
 ```
 
