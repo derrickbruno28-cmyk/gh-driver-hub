@@ -1,0 +1,31 @@
+# Auto-deploy the app to Firebase Hosting whenever code lands on `main`.
+# This replaces the old "push to main -> Netlify deploys" flow.
+#
+# One-time setup (done in web consoles, no terminal needed):
+#   1. Firebase console -> Project settings -> Service accounts ->
+#      "Generate new private key" -> downloads a .json file.
+#   2. GitHub repo -> Settings -> Secrets and variables -> Actions ->
+#      "New repository secret":
+#        Name:  FIREBASE_SERVICE_ACCOUNT_GHLOGISTICS
+#        Value: paste the entire contents of that .json file
+# After that, every merge/push to `main` publishes to
+# https://ghlogistics-driver-hub.web.app automatically.
+
+name: Deploy to Firebase Hosting on merge
+
+on:
+  push:
+    branches:
+      - main
+
+jobs:
+  build_and_deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: FirebaseExtended/action-hosting-deploy@v0
+        with:
+          repoToken: ${{ secrets.GITHUB_TOKEN }}
+          firebaseServiceAccount: ${{ secrets.FIREBASE_SERVICE_ACCOUNT_GHLOGISTICS }}
+          channelId: live
+          projectId: ghlogistics-driver-hub
