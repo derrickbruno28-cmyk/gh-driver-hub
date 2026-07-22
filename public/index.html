@@ -1198,9 +1198,31 @@ function doImport(){
       status:'Active', availability:'Available', partnerId:'', returnDate:'', notes:'', constraints:[], timeOff:[], callOuts:[], documents:[] };
   }).filter(d=>d.firstName||d.lastName);
   if(!built.length){ toast('No valid rows — check your First/Last or Full Name mapping'); return; }
-  if(mode==='replace'){ if(!confirm('Replace ALL '+drivers.length+' existing drivers with '+built.length+' imported?')) return; drivers=built; }
-  else drivers=drivers.concat(built);
-  save(); closeModal(); go('master'); toast('Imported '+built.length+' drivers');
+  if(mode==='replace'){ if(!confirm('Replace ALL '+drivers.length+' existing drivers with '+built.length+' imported?')) return; drivers=built; save(); renderImportResults(built, [], true); return; }
+  /* append mode: skip anyone already on file (by full name), and repeats within this import */
+  const existing={}; drivers.forEach(d=>{ existing[normName(d.firstName,d.lastName)]=d; });
+  const seen={}; const added=[]; const dupes=[];
+  built.forEach(d=>{
+    const key=normName(d.firstName,d.lastName);
+    if(existing[key]) dupes.push({rec:d, reason:'already on file', match:fullName(existing[key])});
+    else if(seen[key]) dupes.push({rec:d, reason:'repeated in this import', match:seen[key]});
+    else { seen[key]=fullName(d); added.push(d); }
+  });
+  drivers=drivers.concat(added); save();
+  renderImportResults(added, dupes, false);
+}
+function normName(fn,ln){ return ((fn||'')+' '+(ln||'')).trim().toLowerCase().replace(/\s+/g,' '); }
+function renderImportResults(added, dupes, replaced){
+  const list=arr=>arr.length ? '<div class="sub-list">'+arr.map(t=>`<div class="sub-item">${esc(t)}</div>`).join('')+'</div>'
+    : '<div style="font-size:12.5px;color:var(--text2);padding:4px">None</div>';
+  const dupeLines=dupes.map(x=>fullName(x.rec)+' — '+x.reason+(x.reason==='already on file'?' ('+esc(x.match)+')':''));
+  const body=document.querySelector('#modal .modal-body');
+  if(body) body.innerHTML=
+    `<div class="sec-label">&#10003; Added ${added.length} new driver${added.length===1?'':'s'}${replaced?' (replaced all)':''}</div>`+list(added.map(d=>fullName(d)))+
+    `<div class="sec-label" style="border-top:1px solid var(--border);margin-top:14px">&#9888; Skipped ${dupes.length} duplicate${dupes.length===1?'':'s'}</div>`+list(dupeLines);
+  const foot=document.getElementById('imp_foot');
+  if(foot) foot.innerHTML=`<button class="btn btn-primary" onclick="closeModal();go('master')">Done</button>`;
+  toast('Added '+added.length+' driver'+(added.length===1?'':'s')+(dupes.length?', skipped '+dupes.length+' dup'+(dupes.length===1?'':'s'):''));
 }
 
 /* ---------- RSI actions ---------- */
