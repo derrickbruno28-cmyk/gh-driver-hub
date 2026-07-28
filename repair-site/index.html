@@ -792,6 +792,8 @@ const CSS = `
 .list-row .addr{color:var(--blue); opacity:1; white-space:normal;}
 
 .chip.prio{font-weight:600;}
+.autosave{margin-top:10px; padding:7px 10px; border-radius:5px; background:rgba(44,115,85,.09);
+  border:1px solid rgba(44,115,85,.25); color:var(--ink-2);}
 
 /* follow-up note editing */
 .hist-acts{margin-left:8px; display:inline-flex; gap:10px; vertical-align:baseline;}
@@ -1204,6 +1206,13 @@ function RepairBoard() {
       return { ...p, archive: p.archive.filter((x) => x.id !== id), repairs: [...p.repairs, rest] };
     });
   const purge = (id) => commit((p) => ({ ...p, archive: p.archive.filter((x) => x.id !== id) }));
+  /* delete outright — for duplicates and mis-entries that were never real
+     repairs, so they don't pollute the Repaired history */
+  const removeRepair = (id) => {
+    const gone = ref.current.repairs.find((r) => r.id === id);
+    ((gone && gone.files) || []).forEach((f) => f.path && window.deleteRepairFile(f.path));
+    commit((p) => ({ ...p, repairs: p.repairs.filter((r) => r.id !== id) }));
+  };
   const clearDemo = () =>
     commit((p) => {
       const kept = p.repairs.filter((r) => !r.demo);
@@ -1292,6 +1301,7 @@ function RepairBoard() {
     team: claimants,
     onAddName: (n) => { addTeamMember(n); claim(r.id, n); },
     onClose: (n) => { closeRepair(r.id, n); setOpen(null); },
+    onRemove: () => { removeRepair(r.id); setOpen(null); },
   });
 
   /* every hook must be called above this line — React requires the same
@@ -1841,6 +1851,7 @@ function PlanBlock({ r, me, onSave, onApprove, onChanges, onNeedName, readOnlyPl
             <button
               className="btn sm"
               disabled={!dirty || !text.trim()}
+              title={!text.trim() ? "Write the plan above first" : !dirty ? "Already saved — edit the text to resubmit" : "Save this plan"}
               onClick={gate(() => onSave(text.trim()))}
             >
               {ps === "none" ? "Submit plan" : "Save and resubmit"}
@@ -2117,7 +2128,7 @@ function Attachments({ r, me, onPatch }) {
   );
 }
 
-function Row({ r, dup, status, statuses, vendors, defaultMinutes, me, expanded, showWhere, onSeen, onToggle, onPatch, onFollowUp, onEditFollowUp, onDeleteFollowUp, onTimer, onSilence, onClose, onSavePlan, onApprove, onChanges, onNeedName, onClaim, onRelease, onUnpark, team, onAddName }) {
+function Row({ r, dup, status, statuses, vendors, defaultMinutes, me, expanded, showWhere, onSeen, onToggle, onPatch, onFollowUp, onEditFollowUp, onDeleteFollowUp, onTimer, onSilence, onClose, onRemove, onSavePlan, onApprove, onChanges, onNeedName, onClaim, onRelease, onUnpark, team, onAddName }) {
   const [note, setNote] = useState("");
   const [nextMin, setNextMin] = useState(String(defaultMinutes || 30));
   const [closing, setClosing] = useState(false);
@@ -2402,6 +2413,11 @@ function Row({ r, dup, status, statuses, vendors, defaultMinutes, me, expanded, 
 
           <Attachments r={r} me={me} onPatch={onPatch} />
 
+          <div className="meta autosave">
+            ✓ The fields above save on their own as you change them — no save button needed. The note box below is
+            separate: it adds a new dated entry to the history.
+          </div>
+
           <div style={{ marginTop: 12 }}>
             <label className="lab">Add a follow-up note</label>
             <textarea className="ta" value={note} placeholder="Who you spoke with, what they promised, ETA…" onChange={(e) => setNote(e.target.value)} />
@@ -2409,6 +2425,20 @@ function Row({ r, dup, status, statuses, vendors, defaultMinutes, me, expanded, 
               {!closing ? (
                 <>
                   <button className="btn danger sm" onClick={() => setClosing(true)}>Mark repaired</button>
+                  {onRemove && (
+                    <button
+                      className="btn danger sm"
+                      title="Delete this entry entirely — for duplicates and mis-entries"
+                      onClick={() =>
+                        window.confirm(
+                          "Remove " + r.unitNumber + " from the board?\n\nThis deletes the entry and any files attached to it. " +
+                          "It does NOT go into Repaired — use \"Mark repaired\" for units that were actually fixed."
+                        ) && onRemove()
+                      }
+                    >
+                      Remove from board
+                    </button>
+                  )}
                   <span className="meta" style={{ display: "flex", alignItems: "center", gap: 6 }}>
                     then remind me in
                     <select className="sel" style={{ width: "auto", padding: "5px 8px" }} value={nextMin} onChange={(e) => setNextMin(e.target.value)}>
@@ -2416,9 +2446,15 @@ function Row({ r, dup, status, statuses, vendors, defaultMinutes, me, expanded, 
                       {PRESETS.map((p) => <option key={p.m} value={p.m}>{p.label}</option>)}
                     </select>
                   </span>
-                  <button className="btn sm" disabled={!note.trim()} onClick={() => { onFollowUp(note.trim(), Number(nextMin) || 0); setNote(""); }}>
-                    Save follow-up
+                  <button
+                    className="btn sm"
+                    disabled={!note.trim()}
+                    title={note.trim() ? "Add this note to the history" : "Type a note above first"}
+                    onClick={() => { onFollowUp(note.trim(), Number(nextMin) || 0); setNote(""); }}
+                  >
+                    Add note
                   </button>
+                  <button className="btn alt sm" onClick={onToggle}>Done</button>
                 </>
               ) : (
                 <>
