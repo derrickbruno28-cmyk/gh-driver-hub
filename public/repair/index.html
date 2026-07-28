@@ -22,6 +22,7 @@
 <script src="https://www.gstatic.com/firebasejs/10.12.2/firebase-app-compat.js"></script>
 <script src="https://www.gstatic.com/firebasejs/10.12.2/firebase-auth-compat.js"></script>
 <script src="https://www.gstatic.com/firebasejs/10.12.2/firebase-firestore-compat.js"></script>
+<script src="https://www.gstatic.com/firebasejs/10.12.2/firebase-storage-compat.js"></script>
 </head>
 <body>
 <div id="gate">
@@ -103,6 +104,34 @@ window.storage = {
     });
   }
 };
+
+/* ---- file uploads: invoices, photos, videos -> Firebase Storage ----
+   Only the download URL is kept in the board document, so the board stays
+   small no matter how many files pile up. Files land under driverDocs/
+   (the same top-level folder the Driver Hub already uploads to, so the
+   existing Storage security rules cover them). */
+var storageSvc = null;
+try { storageSvc = firebase.storage(); } catch (e) { storageSvc = null; }
+
+window.uploadRepairFile = function(file, onProgress){
+  return new Promise(function(resolve, reject){
+    if (!storageSvc) return reject(new Error('Cloud file storage unavailable'));
+    var safe = String(file.name).replace(/[^\w.\-]+/g, '_');
+    var path = 'driverDocs/repair_' + Date.now() + '_' + Math.random().toString(36).slice(2, 8) + '_' + safe;
+    var task = storageSvc.ref().child(path).put(file);
+    task.on('state_changed', function(snap){
+      if (onProgress && snap.totalBytes) onProgress(Math.round(snap.bytesTransferred / snap.totalBytes * 100));
+    }, reject, function(){
+      task.snapshot.ref.getDownloadURL().then(function(url){
+        resolve({ url: url, path: path, name: file.name, size: file.size, mime: file.type });
+      }, reject);
+    });
+  });
+};
+window.deleteRepairFile = function(path){
+  if (!storageSvc || !path) return Promise.resolve();
+  return storageSvc.ref().child(path).delete().catch(function(){ /* already gone */ });
+};
 </script>
 <script type="text/babel" data-presets="react">
 const { useState, useEffect, useMemo, useRef, useCallback } = React;
@@ -132,7 +161,10 @@ const DEFAULT_STATUSES = [
   { id: "s-scheduled", label: "Scheduled", tone: "neutral" },
   { id: "s-parts", label: "Waiting on parts", tone: "wait" },
   { id: "s-quote", label: "Pending quote approval", tone: "wait" },
+  { id: "s-pendinvoice", label: "Pending invoice", tone: "wait" },
   { id: "s-invoice", label: "Pending invoice approval", tone: "wait" },
+  { id: "s-payment", label: "Pending payment", tone: "wait" },
+  { id: "s-paid", label: "Paid", tone: "neutral" },
   { id: "s-actionplan", label: "Pending action plan", tone: "alert" },
 ];
 
@@ -243,11 +275,13 @@ const inMinutes = (m) => new Date(Date.now() + m * 60000).toISOString();
 
 const uid = (p) => p + "-" + Math.random().toString(36).slice(2, 9);
 const nowISO = () => new Date().toISOString();
+const mapsUrl = (addr) => "https://maps.google.com/?q=" + encodeURIComponent(addr);
+const fmtSize = (b) => (b >= 1048576 ? (b / 1048576).toFixed(1) + " MB" : Math.max(1, Math.round(b / 1024)) + " KB");
 
 /* Boards saved before a default status existed need it merged in once.
    Bump STATUS_SEED when adding to DEFAULT_STATUSES. Statuses a user has
    deliberately removed stay removed, since the seed only runs once. */
-const STATUS_SEED = 2;
+const STATUS_SEED = 3;
 function mergeStatuses(stored) {
   const list = Array.isArray(stored) && stored.length ? [...stored] : [...DEFAULT_STATUSES];
   DEFAULT_STATUSES.forEach((d, i) => {
@@ -261,7 +295,7 @@ function mergeStatuses(stored) {
 }
 
 const DEMO = () => {
-  const vSA = { id: uid("v"), name: "Alamo Diesel & Brake", city: "San Antonio", phone: "(210) 555-0148" };
+  const vSA = { id: uid("v"), name: "Alamo Diesel & Brake", city: "San Antonio", phone: "(210) 555-0148", address: "4815 Interstate 10 E, San Antonio, TX 78219" };
   const vDA = { id: uid("v"), name: "Trinity Trailer Repair", city: "Dallas", phone: "(214) 555-0233" };
   const vRD = { id: uid("v"), name: "Pilot Road Service", city: OTR, phone: "(800) 555-0177", where: "nationwide dispatch" };
   const vME = { id: uid("v"), name: "Delta Fleet Services", city: "Memphis", phone: "(901) 555-0119" };
@@ -732,6 +766,30 @@ const CSS = `
   .mast h1{font-size:27px;}
 }
 @media (prefers-reduced-motion:reduce){ .dot{animation:none;} }
+
+/* shop street address */
+.addr{color:inherit; opacity:.8; text-decoration:none; font-size:12px; max-width:340px;
+  white-space:nowrap; overflow:hidden; text-overflow:ellipsis;}
+.addr:hover{opacity:1; text-decoration:underline;}
+.list-row .addr{color:var(--blue); opacity:1; white-space:normal;}
+
+/* attachments */
+.attach{margin-top:12px; border-top:1px dashed var(--rule); padding-top:10px;}
+.attach-hd{display:flex; align-items:center; gap:8px; flex-wrap:wrap; margin-bottom:6px;}
+.attach-add{display:inline-flex; align-items:center;}
+.attach-docs{display:flex; flex-direction:column; gap:6px; margin-top:6px;}
+.attach-docs .doc{display:flex; align-items:center; gap:8px; font-size:13px; flex-wrap:wrap;}
+.attach-docs .doc a{color:var(--blue); word-break:break-all;}
+.attach-media{display:flex; gap:10px; flex-wrap:wrap; margin-top:8px;}
+.thumb{position:relative; display:block; width:96px; height:96px; border-radius:6px;
+  overflow:hidden; border:1px solid var(--rule); background:#0b0d10;}
+.thumb img{width:100%; height:100%; object-fit:cover; display:block;}
+.thumb.vid{width:200px; height:120px;}
+.thumb video{width:100%; height:100%; object-fit:cover; display:block; background:#000;}
+.thumb .fx{position:absolute; top:4px; right:4px;}
+.fx{border:0; background:rgba(19,28,38,.7); color:#fff; border-radius:50%; width:18px; height:18px;
+  line-height:1; font-size:12px; display:inline-flex; align-items:center; justify-content:center; padding:0;}
+.fx:hover{background:var(--red);}
 `;
 
 /* --------------------------- alarm engine -------------------------- */
@@ -948,7 +1006,13 @@ function RepairBoard() {
   /* mutations */
   const addRepair = (r) => commit((p) => ({ ...p, repairs: [...p.repairs, r] }));
   const patchRepair = (id, patch) =>
-    commit((p) => ({ ...p, repairs: p.repairs.map((r) => (r.id === id ? { ...r, ...patch } : r)) }));
+    /* accepts a plain object, or a function of the current repair — the
+       function form is what file uploads use so parallel patches can't
+       clobber each other */
+    commit((p) => ({
+      ...p,
+      repairs: p.repairs.map((r) => (r.id === id ? { ...r, ...(typeof patch === "function" ? patch(r) : patch) } : r)),
+    }));
   const logFollowUp = (id, note, nextMinutes) =>
     commit((p) => ({
       ...p,
@@ -1311,6 +1375,11 @@ function RepairBoard() {
                   <span className="ct">{rows.length}</span>
                   <span className="shop-sub">{v.city === OTR ? "OTR" : v.city}</span>
                   {v.phone && <span className="ph mono">{v.phone}</span>}
+                  {v.address && (
+                    <a className="addr mono" href={mapsUrl(v.address)} target="_blank" rel="noreferrer" title="Open in Google Maps">
+                      📍 {v.address}
+                    </a>
+                  )}
                   <span className="spacer" />
                   <button className="btn alt sm" onClick={() => markAllSeen(rows.map((r) => r.id))}>
                     Reviewed
@@ -1362,6 +1431,11 @@ function RepairBoard() {
                         <h3>{v.name}</h3>
                         <span className="ct">{rows.length}</span>
                         {v.phone && <span className="ph mono">{v.phone}</span>}
+                        {v.address && (
+                          <a className="addr mono" href={mapsUrl(v.address)} target="_blank" rel="noreferrer" title="Open in Google Maps">
+                            📍 {v.address}
+                          </a>
+                        )}
                         <span className="spacer" />
                         <TimerButton
                           label={"Remind on all " + rows.length}
@@ -1873,6 +1947,111 @@ function TimerButton({ label, state = "none", onSet, compact, canPark = true }) 
 
 /* ------------------------------- row ------------------------------ */
 
+/* ---------------------------- attachments -------------------------- */
+/* Invoices, photos, and videos live in Firebase Storage; the repair
+   record only keeps the link, name, and who added it. */
+
+const FILE_KINDS = [
+  { k: "invoice", label: "Invoice", accept: ".pdf,.doc,.docx,.xls,.xlsx,image/*", max: 25 },
+  { k: "photo", label: "Photo", accept: "image/*", max: 25 },
+  { k: "video", label: "Video", accept: "video/*", max: 200 },
+];
+
+function Attachments({ r, me, onPatch }) {
+  const [busy, setBusy] = useState(null); // { name, pct } while uploading
+  const [err, setErr] = useState("");
+  const files = r.files || [];
+  const invoices = files.filter((f) => f.kind === "invoice");
+  const photos = files.filter((f) => f.kind === "photo");
+  const videos = files.filter((f) => f.kind === "video");
+
+  const pick = (kind, max) => (e) => {
+    const list = [...e.target.files];
+    e.target.value = "";
+    if (!list.length) return;
+    setErr("");
+    (async () => {
+      for (const f of list) {
+        if (f.size > max * 1048576) {
+          setErr(f.name + " is too big — " + kind + "s max out at " + max + " MB.");
+          continue;
+        }
+        setBusy({ name: f.name, pct: 0 });
+        try {
+          const up = await window.uploadRepairFile(f, (pct) => setBusy({ name: f.name, pct }));
+          onPatch((cur) => ({
+            files: [
+              ...(cur.files || []),
+              { id: uid("f"), kind, name: up.name, size: up.size, mime: up.mime, url: up.url, path: up.path, at: nowISO(), by: me || "" },
+            ],
+          }));
+        } catch (ex) {
+          const code = ex && ex.code;
+          setErr(
+            f.name + ": " +
+            (code === "storage/unauthorized" ? "blocked by Storage security rules"
+              : code === "storage/unknown" ? "cloud file storage may not be enabled"
+              : ex && ex.message ? ex.message : "upload failed")
+          );
+        }
+      }
+      setBusy(null);
+    })();
+  };
+
+  const remove = (f) => {
+    if (!window.confirm("Remove " + f.name + " from this repair?")) return;
+    onPatch((cur) => ({ files: (cur.files || []).filter((x) => x.id !== f.id) }));
+    window.deleteRepairFile(f.path);
+  };
+
+  return (
+    <div className="attach">
+      <div className="attach-hd">
+        <label className="lab" style={{ margin: 0 }}>Files — invoices, photos, videos</label>
+        {FILE_KINDS.map((fk) => (
+          <label key={fk.k} className="btn alt sm attach-add">
+            + {fk.label}
+            <input type="file" accept={fk.accept} multiple style={{ display: "none" }} onChange={pick(fk.k, fk.max)} />
+          </label>
+        ))}
+      </div>
+      {busy && <div className="meta">Uploading {busy.name}… {busy.pct}%</div>}
+      {err && <div className="err">{err}</div>}
+      {invoices.length > 0 && (
+        <div className="attach-docs">
+          {invoices.map((f) => (
+            <span className="doc" key={f.id}>
+              📄 <a href={f.url} target="_blank" rel="noreferrer">{f.name}</a>
+              <span className="meta">{fmtSize(f.size)}{f.by ? " · " + f.by : ""}</span>
+              <button className="fx" title="Remove" onClick={() => remove(f)}>×</button>
+            </span>
+          ))}
+        </div>
+      )}
+      {(photos.length > 0 || videos.length > 0) && (
+        <div className="attach-media">
+          {photos.map((f) => (
+            <span className="thumb" key={f.id} title={f.name}>
+              <a href={f.url} target="_blank" rel="noreferrer">
+                <img src={f.url} alt={f.name} loading="lazy" />
+              </a>
+              <button className="fx" title="Remove" onClick={() => remove(f)}>×</button>
+            </span>
+          ))}
+          {videos.map((f) => (
+            <span className="thumb vid" key={f.id} title={f.name}>
+              <video src={f.url} controls preload="metadata" />
+              <button className="fx" title="Remove" onClick={() => remove(f)}>×</button>
+            </span>
+          ))}
+        </div>
+      )}
+      {files.length === 0 && !busy && <div className="meta">Nothing attached yet.</div>}
+    </div>
+  );
+}
+
 function Row({ r, status, statuses, vendors, defaultMinutes, me, expanded, showWhere, onSeen, onToggle, onPatch, onFollowUp, onTimer, onSilence, onClose, onSavePlan, onApprove, onChanges, onNeedName, onClaim, onRelease, onUnpark, team, onAddName }) {
   const [note, setNote] = useState("");
   const [nextMin, setNextMin] = useState(String(defaultMinutes || 30));
@@ -1916,6 +2095,11 @@ function Row({ r, status, statuses, vendors, defaultMinutes, me, expanded, showW
         )}
         <span className="issue">{r.issue}</span>
         {parked && <span className="chip parked-chip">📅 parked to {fmtDueShort(r.dueAt)}</span>}
+        {(r.files || []).length > 0 && (
+          <span className="chip neutral" title={(r.files || []).length + " file(s) attached — open Edit to view"}>
+            📎 {(r.files || []).length}
+          </span>
+        )}
         <span className={"pl " + ps} title={PLAN_LABEL[ps]}>
           {ps === "approved" ? "✓ plan approved" : ps === "submitted" ? "plan awaiting approval" : ps === "changes" ? "plan sent back" : "no plan yet"}
         </span>
@@ -1928,6 +2112,7 @@ function Row({ r, status, statuses, vendors, defaultMinutes, me, expanded, showW
           </span>
         )}
         <span className="meta">Reported <b>{stamp(r.reportedAt)}</b></span>
+        {r.poc && <span className="meta">POC <b>{r.poc}</b></span>}
         <span className={"meta " + (band === "ok" ? "" : band)}>
           Last follow-up <b>{r.followUps && r.followUps.length ? elapsed(lastTouch(r)) + " ago" : "none yet"}</b>
         </span>
@@ -2037,7 +2222,18 @@ function Row({ r, status, statuses, vendors, defaultMinutes, me, expanded, showW
               <label className="lab">Issue</label>
               <input className="inp" value={r.issue} onChange={(e) => onPatch({ issue: e.target.value })} />
             </div>
+            <div>
+              <label className="lab">POC — point of contact</label>
+              <input
+                className="inp"
+                value={r.poc || ""}
+                placeholder="Mike, service writer — (210) 555-0000"
+                onChange={(e) => onPatch({ poc: e.target.value })}
+              />
+            </div>
           </div>
+
+          <Attachments r={r} me={me} onPatch={onPatch} />
 
           <div style={{ marginTop: 12 }}>
             <label className="lab">Add a follow-up note</label>
@@ -2116,6 +2312,8 @@ function AddRepair({ vendors, statuses, defaultMinutes, onAddVendor, onSave, onC
   const [parkIt, setParkIt] = useState(true);
   const [location, setLocation] = useState("");
   const [newShop, setNewShop] = useState("");
+  const [newShopAddr, setNewShopAddr] = useState("");
+  const [poc, setPoc] = useState("");
   const [err, setErr] = useState("");
 
   const isOtr = city === OTR;
@@ -2127,10 +2325,11 @@ function AddRepair({ vendors, statuses, defaultMinutes, onAddVendor, onSave, onC
   const addShop = () => {
     const name = newShop.trim();
     if (!name) return;
-    const v = { id: uid("v"), name, city, phone: "" };
+    const v = { id: uid("v"), name, city, phone: "", address: newShopAddr.trim() };
     onAddVendor(v);
     setVendorId(v.id);
     setNewShop("");
+    setNewShopAddr("");
   };
 
   const save = () => {
@@ -2150,6 +2349,7 @@ function AddRepair({ vendors, statuses, defaultMinutes, onAddVendor, onSave, onC
       ownership: unitType === "Trailer" ? ownership : "GH",
       lessor: unitType === "Trailer" && ownership !== "GH" ? lessor.trim() : "",
       issue: issue.trim(),
+      poc: poc.trim(),
       statusId,
       reportedAt: when ? new Date(when).toISOString() : nowISO(),
       dueAt: onDate ? new Date(remindAt).toISOString() : Number(remind) > 0 ? inMinutes(Number(remind)) : null,
@@ -2240,10 +2440,28 @@ function AddRepair({ vendors, statuses, defaultMinutes, onAddVendor, onSave, onC
           />
           <button className="btn alt" onClick={addShop} disabled={!newShop.trim()}>Add</button>
         </div>
+        {newShop.trim() && (
+          <input
+            className="inp"
+            style={{ marginTop: 8 }}
+            placeholder="Street address (optional) — 4815 Interstate 10 E, San Antonio, TX"
+            value={newShopAddr}
+            onChange={(e) => setNewShopAddr(e.target.value)}
+          />
+        )}
       </div>
       <div className="field">
         <label className="lab">Issue</label>
         <textarea className="ta" value={issue} placeholder="What's wrong, and is it out of service?" onChange={(e) => setIssue(e.target.value)} />
+      </div>
+      <div className="field">
+        <label className="lab">POC — point of contact (optional)</label>
+        <input
+          className="inp"
+          value={poc}
+          placeholder="Mike, service writer — (210) 555-0000"
+          onChange={(e) => setPoc(e.target.value)}
+        />
       </div>
       <div className="grid2">
         <div className="field">
@@ -2457,7 +2675,7 @@ function Approvals({ needsApproval, needsPlan, me, vendorOf, statusOf, onSave, o
 
 function Vendors({ vendors, repairs, onAdd, onRemove, onRename, onClose }) {
   const [editing, setEditing] = useState(null);
-  const [draft, setDraft] = useState({ name: "", phone: "", city: CITIES[0], where: "" });
+  const [draft, setDraft] = useState({ name: "", phone: "", city: CITIES[0], where: "", address: "" });
   const commitEdit = (v) => {
     if (!draft.name.trim()) return;
     onRename(v.id, {
@@ -2465,6 +2683,7 @@ function Vendors({ vendors, repairs, onAdd, onRemove, onRename, onClose }) {
       phone: draft.phone.trim(),
       city: draft.city,
       where: draft.city === OTR ? draft.where.trim() : "",
+      address: draft.address.trim(),
     });
     setEditing(null);
   };
@@ -2472,13 +2691,14 @@ function Vendors({ vendors, repairs, onAdd, onRemove, onRename, onClose }) {
   const [city, setCity] = useState(LOCATIONS[0]);
   const [phone, setPhone] = useState("");
   const [where, setWhere] = useState("");
+  const [address, setAddress] = useState("");
   const [err, setErr] = useState("");
   const isOtr = city === OTR;
 
   const add = () => {
     if (!name.trim()) return setErr("Enter the shop name.");
-    onAdd({ id: uid("v"), name: name.trim(), city, phone: phone.trim(), where: isOtr ? where.trim() : "" });
-    setName(""); setPhone(""); setWhere(""); setErr("");
+    onAdd({ id: uid("v"), name: name.trim(), city, phone: phone.trim(), where: isOtr ? where.trim() : "", address: address.trim() });
+    setName(""); setPhone(""); setWhere(""); setAddress(""); setErr("");
   };
 
   return (
@@ -2507,6 +2727,15 @@ function Vendors({ vendors, repairs, onAdd, onRemove, onRename, onClose }) {
             <input className="inp" value={where} placeholder="I-10 corridor, West TX" onChange={(e) => setWhere(e.target.value)} />
           </div>
         )}
+      </div>
+      <div className="field">
+        <label className="lab">Street address (optional)</label>
+        <input
+          className="inp"
+          value={address}
+          placeholder="4815 Interstate 10 E, San Antonio, TX 78219"
+          onChange={(e) => setAddress(e.target.value)}
+        />
       </div>
       {err && <div className="err">{err}</div>}
       <div className="foot" style={{ marginBottom: 18 }}>
@@ -2555,6 +2784,15 @@ function Vendors({ vendors, repairs, onAdd, onRemove, onRename, onClose }) {
                               <input className="inp" value={draft.where} placeholder="I-10 corridor, West TX" onChange={(e) => setDraft({ ...draft, where: e.target.value })} />
                             </div>
                           )}
+                          <div>
+                            <label className="lab">Street address</label>
+                            <input
+                              className="inp"
+                              value={draft.address}
+                              placeholder="4815 Interstate 10 E, San Antonio, TX 78219"
+                              onChange={(e) => setDraft({ ...draft, address: e.target.value })}
+                            />
+                          </div>
                           <div className="vedit-foot">
                             {draft.city !== v.city && inUse > 0 && (
                               <span className="meta">
@@ -2576,6 +2814,13 @@ function Vendors({ vendors, repairs, onAdd, onRemove, onRename, onClose }) {
                           {v.phone || "no phone on file"}
                           {v.where ? " · " + v.where : ""}
                         </div>
+                        {v.address && (
+                          <div className="sub">
+                            <a className="addr" href={mapsUrl(v.address)} target="_blank" rel="noreferrer" title="Open in Google Maps">
+                              📍 {v.address}
+                            </a>
+                          </div>
+                        )}
                       </div>
                       <div style={{ marginLeft: "auto", display: "flex", gap: 8, alignItems: "center" }}>
                         {inUse > 0 && <span className="meta">{inUse} unit{inUse === 1 ? "" : "s"} here</span>}
@@ -2583,7 +2828,7 @@ function Vendors({ vendors, repairs, onAdd, onRemove, onRename, onClose }) {
                           className="btn alt sm"
                           onClick={() => {
                             setEditing(v.id);
-                            setDraft({ name: v.name || "", phone: v.phone || "", city: v.city || CITIES[0], where: v.where || "" });
+                            setDraft({ name: v.name || "", phone: v.phone || "", city: v.city || CITIES[0], where: v.where || "", address: v.address || "" });
                           }}
                         >
                           Edit
@@ -2689,13 +2934,15 @@ function Archive({ archive, vendors, onRestore, onPurge, onClose }) {
 function ExportCsv({ repairs, archive, vendorOf, statusOf, onClose }) {
   const [copied, setCopied] = useState(false);
   const csv = useMemo(() => {
-    const head = ["Location", "Breakdown location", "Shop", "Unit type", "Unit number", "Ownership", "Lessor / rental co", "Issue", "Status", "Reported", "Last follow-up", "Follow-ups", "Claimed by", "Reminder due", "Parked", "Plan status", "Plan of action", "Approved by", "Hours down", "Repaired"];
+    const head = ["Location", "Breakdown location", "Shop", "Shop address", "POC", "Unit type", "Unit number", "Ownership", "Lessor / rental co", "Issue", "Status", "Reported", "Last follow-up", "Follow-ups", "Claimed by", "Reminder due", "Parked", "Plan status", "Plan of action", "Approved by", "Files", "Hours down", "Repaired"];
     const esc = (v) => '"' + String(v == null ? "" : v).replace(/"/g, '""') + '"';
     const line = (r, done) =>
       [
         r.city,
         r.location || "",
         vendorOf(r.vendorId).name,
+        vendorOf(r.vendorId).address || "",
+        r.poc || "",
         r.unitType,
         r.unitNumber,
         ownOf(r),
@@ -2711,6 +2958,7 @@ function ExportCsv({ repairs, archive, vendorOf, statusOf, onClose }) {
         PLAN_LABEL[planState(r)],
         r.plan || "",
         r.approvedBy ? r.approvedBy + " " + stamp(r.approvedAt) : "",
+        (r.files || []).map((f) => f.name).join("; "),
         done ? Math.round(hoursSince(r.reportedAt) - hoursSince(r.repairedAt)) : Math.round(hoursSince(r.reportedAt)),
         done ? stamp(r.repairedAt) : "",
       ].map(esc).join(",");
