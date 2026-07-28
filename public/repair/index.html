@@ -132,6 +132,26 @@ window.deleteRepairFile = function(path){
   if (!storageSvc || !path) return Promise.resolve();
   return storageSvc.ref().child(path).delete().catch(function(){ /* already gone */ });
 };
+
+/* ---- incoming issues: the Telegram bots drop docs into the
+   `repairIntake` collection; the board polls it and shows them in the
+   Incoming issues panel until someone accepts or dismisses them.
+   Doc schema is documented in REPAIR-INTAKE.md at the repo root. ---- */
+window.intakeFetch = async function(){
+  var snap = await db.collection('repairIntake').limit(200).get();
+  var out = [];
+  snap.forEach(function(d){
+    var v = d.data() || {};
+    v.id = d.id;
+    out.push(v);
+  });
+  /* newest first; docs without createdAt sink to the bottom */
+  out.sort(function(a, b){ return String(b.createdAt || '').localeCompare(String(a.createdAt || '')); });
+  return out;
+};
+window.intakeDelete = function(id){
+  return db.collection('repairIntake').doc(id).delete().catch(function(){ /* already gone */ });
+};
 </script>
 <script type="text/babel" data-presets="react">
 const { useState, useEffect, useMemo, useRef, useCallback } = React;
@@ -175,6 +195,15 @@ const TONE_LABEL = {
   wait: "Waiting on someone",
   alert: "Needs attention",
 };
+
+/* priority — straight from the Telegram intake template */
+const PRIORITIES = [
+  { p: 1, label: "Critical" },
+  { p: 2, label: "High" },
+  { p: 3, label: "Routine" },
+];
+const PRIO_LABEL = { 1: "Critical", 2: "High", 3: "Routine" };
+const prioOf = (r) => ([1, 2, 3].includes(Number(r.priority)) ? Number(r.priority) : 3);
 
 const OWNERSHIP = ["GH", "Leased", "Rented"];
 const OWN_LABEL = { GH: "GH", Leased: "Leased", Rented: "Rented" };
@@ -325,6 +354,7 @@ const DEMO = () => {
         unitNumber: "T-4417",
         claimedBy: "Roger",
         claimedAt: t(5),
+        priority: 1,
         issue: "Air leak at front axle, DOT out-of-service",
         statusId: "s-inprogress",
         reportedAt: t(61),
@@ -773,6 +803,8 @@ const CSS = `
 .addr:hover{opacity:1; text-decoration:underline;}
 .list-row .addr{color:var(--blue); opacity:1; white-space:normal;}
 
+.chip.prio{font-weight:600;}
+
 /* attachments */
 .attach{margin-top:12px; border-top:1px dashed var(--rule); padding-top:10px;}
 .attach-hd{display:flex; align-items:center; gap:8px; flex-wrap:wrap; margin-bottom:6px;}
@@ -843,6 +875,8 @@ function RepairBoard() {
   const [shut, setShut] = useState({});
   const [modal, setModal] = useState(null); // 'add' | 'vendors' | 'statuses' | 'archive' | 'csv'
   const [prefs, setPrefs] = useState({ sound: true, defaultMinutes: 30, name: "" });
+  const [intake, setIntake] = useState([]); // waiting Telegram posts
+  const [intakeDraft, setIntakeDraft] = useState(null); // item being accepted onto the board
   const [, tick] = useState(0);
   const ref = useRef(data);
   ref.current = data;
@@ -947,6 +981,25 @@ function RepairBoard() {
     const i = setInterval(sync, 15000);
     return () => clearInterval(i);
   }, [ready, sync]);
+
+  /* incoming issues the Telegram bots dropped in Firestore */
+  const pollIntake = useCallback(async () => {
+    try {
+      setIntake(await window.intakeFetch());
+    } catch (e) {
+      /* collection may not exist yet — fine, nothing incoming */
+    }
+  }, []);
+  useEffect(() => {
+    if (!ready) return;
+    pollIntake();
+    const i = setInterval(pollIntake, 30000);
+    return () => clearInterval(i);
+  }, [ready, pollIntake]);
+  const dropIntake = (id) => {
+    window.intakeDelete(id);
+    setIntake((list) => list.filter((x) => x.id !== id));
+  };
 
   const { repairs, vendors, statuses, archive } = data;
   const statusOf = (id) => statuses.find((s) => s.id === id) || { label: "Unassigned", tone: "neutral" };
@@ -1188,6 +1241,8 @@ function RepairBoard() {
       const ra = dueState(a) === "due" ? 0 : a.dueAt ? 1 : 2;
       const rb = dueState(b) === "due" ? 0 : b.dueAt ? 1 : 2;
       if (ra !== rb) return ra - rb;
+      /* criticals float to the top of their shop */
+      if (prioOf(a) !== prioOf(b)) return prioOf(a) - prioOf(b);
       if (ra === 1) return new Date(a.dueAt) - new Date(b.dueAt);
       return new Date(a.reportedAt) - new Date(b.reportedAt);
     });
@@ -1278,6 +1333,10 @@ function RepairBoard() {
             <button className="btn alt sm" onClick={() => setModal("approve")}>
               Plans of action
               {needsApproval.length > 0 && <span className="count-pill">{needsApproval.length}</span>}
+            </button>
+            <button className="btn alt sm" onClick={() => setModal("incoming")}>
+              Incoming issues
+              {intake.length > 0 && <span className="count-pill">{intake.length}</span>}
             </button>
             <button className="bell" onClick={() => setModal("me")} title="Your name is stamped on plans and approvals">
               {prefs.name ? "👤 " + prefs.name : "👤 Set your name"}
@@ -1538,8 +1597,23 @@ function RepairBoard() {
           vendors={vendors}
           statuses={statuses}
           defaultMinutes={prefs.defaultMinutes}
+          initial={intakeDraft}
           onAddVendor={(v) => commit((p) => ({ ...p, vendors: [...p.vendors, v] }))}
-          onSave={(r) => { addRepair(r); setModal(null); }}
+          onSave={(r) => {
+            addRepair(r);
+            /* accepted an incoming item — clear it from the queue */
+            if (intakeDraft && intakeDraft.id) dropIntake(intakeDraft.id);
+            setIntakeDraft(null);
+            setModal(null);
+          }}
+          onClose={() => { setIntakeDraft(null); setModal(null); }}
+        />
+      )}
+      {modal === "incoming" && (
+        <Incoming
+          items={intake}
+          onAccept={(it) => { setIntakeDraft(it); setModal("add"); }}
+          onDismiss={dropIntake}
           onClose={() => setModal(null)}
         />
       )}
@@ -2078,6 +2152,11 @@ function Row({ r, status, statuses, vendors, defaultMinutes, me, expanded, showW
           </span>
         )}
         <span className="unit">{r.unitNumber}</span>
+        {prioOf(r) < 3 && (
+          <span className={"chip prio " + (prioOf(r) === 1 ? "alert" : "wait")} title={"Priority " + prioOf(r) + " — " + PRIO_LABEL[prioOf(r)]}>
+            {prioOf(r) === 1 ? "⚠ Critical" : "High priority"}
+          </span>
+        )}
         <ClaimChip r={r} me={me} team={team} onClaim={onClaim} onRelease={onRelease} onNeedName={onNeedName} onAddName={onAddName} />
         {tracksOwnership(r) && (
           <span className={"own " + OWN_CLASS[ownOf(r)]} title={onHire(r) ? ownOf(r) + (r.lessor ? " from " + r.lessor : "") : "GH-owned trailer"}>
@@ -2113,6 +2192,7 @@ function Row({ r, status, statuses, vendors, defaultMinutes, me, expanded, showW
         )}
         <span className="meta">Reported <b>{stamp(r.reportedAt)}</b></span>
         {r.poc && <span className="meta">POC <b>{r.poc}</b></span>}
+        {r.approver && <span className="meta">Approved by <b>{r.approver}</b></span>}
         <span className={"meta " + (band === "ok" ? "" : band)}>
           Last follow-up <b>{r.followUps && r.followUps.length ? elapsed(lastTouch(r)) + " ago" : "none yet"}</b>
         </span>
@@ -2231,6 +2311,21 @@ function Row({ r, status, statuses, vendors, defaultMinutes, me, expanded, showW
                 onChange={(e) => onPatch({ poc: e.target.value })}
               />
             </div>
+            <div>
+              <label className="lab">Priority</label>
+              <select className="sel" value={prioOf(r)} onChange={(e) => onPatch({ priority: Number(e.target.value) })}>
+                {PRIORITIES.map((p) => <option key={p.p} value={p.p}>{p.p} — {p.label}</option>)}
+              </select>
+            </div>
+            <div>
+              <label className="lab">Approved by</label>
+              <input
+                className="inp"
+                value={r.approver || ""}
+                placeholder="Who signed off on this repair"
+                onChange={(e) => onPatch({ approver: e.target.value })}
+              />
+            </div>
           </div>
 
           <Attachments r={r} me={me} onPatch={onPatch} />
@@ -2297,20 +2392,144 @@ function Sheet({ title, children, onClose, wide }) {
   );
 }
 
-function AddRepair({ vendors, statuses, defaultMinutes, onAddVendor, onSave, onClose }) {
-  const [city, setCity] = useState(LOCATIONS[0]);
+/* ------------------------- incoming issues ------------------------- */
+/* Items the Telegram bots dropped into `repairIntake`. They wait here
+   until a person accepts them onto the board or dismisses them. */
+
+function Incoming({ items, onAccept, onDismiss, onClose }) {
+  const [kind, setKind] = useState("All");
+  const shown = items.filter((it) => kind === "All" || String(it.unitType || "").toLowerCase() === kind.toLowerCase());
+  const counts = {
+    All: items.length,
+    Truck: items.filter((it) => String(it.unitType || "").toLowerCase() === "truck").length,
+    Trailer: items.filter((it) => String(it.unitType || "").toLowerCase() === "trailer").length,
+  };
+  return (
+    <Sheet title="Incoming issues" onClose={onClose} wide>
+      <div className="meta" style={{ marginBottom: 10 }}>
+        Posted from the repair Telegram groups. Accept one to put it on the board — you'll get a chance to check
+        the details and pick a shop first — or dismiss it if it's a duplicate or already handled.
+      </div>
+      <div className="seg-ctl" style={{ marginBottom: 12 }}>
+        {["All", "Truck", "Trailer"].map((k) => (
+          <button key={k} aria-pressed={kind === k} onClick={() => setKind(k)}>
+            {k === "All" ? "All" : k + "s"} ({counts[k]})
+          </button>
+        ))}
+      </div>
+      {shown.length === 0 ? (
+        <div className="empty">
+          <strong>{items.length === 0 ? "Nothing waiting" : "No " + kind.toLowerCase() + "s waiting"}</strong>
+          New posts from the Telegram groups land here on their own within about 30 seconds.
+        </div>
+      ) : (
+        <div className="list">
+          {shown.map((it) => {
+            const prio = [1, 2, 3].includes(Number(it.priority)) ? Number(it.priority) : null;
+            const media = (it.media || []).length;
+            return (
+              <div className="list-row" key={it.id} style={{ alignItems: "flex-start" }}>
+                <div style={{ minWidth: 0 }}>
+                  <div className="nm">
+                    <span className="mono">{it.unitNumber || "unit ?"}</span>
+                    {" · "}{/trailer/i.test(it.unitType || "") ? "Trailer" : "Truck"}
+                    {it.trailerType ? " (" + it.trailerType + ")" : ""}
+                    {prio && prio < 3 && (
+                      <span className={"chip prio " + (prio === 1 ? "alert" : "wait")} style={{ marginLeft: 8 }}>
+                        {prio === 1 ? "⚠ Critical" : "High priority"}
+                      </span>
+                    )}
+                  </div>
+                  <div className="sub" style={{ whiteSpace: "pre-wrap" }}>{it.issue || "no description"}</div>
+                  <div className="sub mono">
+                    {[
+                      it.location ? "📍 " + it.location : "",
+                      it.attachedTruck ? "truck " + it.attachedTruck : "",
+                      it.safeToMove != null && it.safeToMove !== "" ? "safe to move: " + yn(it.safeToMove) : "",
+                      it.loaded != null && it.loaded !== "" ? "loaded: " + yn(it.loaded) : "",
+                      it.neededBy ? "needed by " + it.neededBy : "",
+                      media ? "📎 " + media + " file" + (media === 1 ? "" : "s") : "",
+                    ].filter(Boolean).join(" · ")}
+                  </div>
+                  <div className="sub">
+                    {it.requestedBy ? "Requested by " + it.requestedBy : "Requester unknown"}
+                    {it.date ? " · " + it.date : it.createdAt ? " · " + stamp(it.createdAt) : ""}
+                  </div>
+                </div>
+                <div style={{ marginLeft: "auto", display: "flex", gap: 8, flexShrink: 0 }}>
+                  <button className="btn sm" onClick={() => onAccept(it)}>Add to board</button>
+                  <button
+                    className="btn danger sm"
+                    onClick={() => window.confirm("Dismiss this without adding it to the board?") && onDismiss(it.id)}
+                  >
+                    Dismiss
+                  </button>
+                </div>
+              </div>
+            );
+          })}
+        </div>
+      )}
+    </Sheet>
+  );
+}
+
+/* map a Telegram intake item onto the form's fields */
+const yn = (v) => (v === true || /^y/i.test(String(v || "")) ? "yes" : v === false || /^n/i.test(String(v || "")) ? "no" : String(v || ""));
+const intakeCity = (it) => {
+  const loc = String((it && it.location) || "");
+  const hit = CITIES.find((c) => loc.toLowerCase().includes(c.toLowerCase()));
+  return hit || (loc ? OTR : LOCATIONS[0]);
+};
+const intakeIssue = (it) => {
+  if (!it) return "";
+  const bits = [it.issue || ""];
+  if (it.trailerType) bits.push("Type: " + it.trailerType);
+  if (it.attachedTruck) bits.push("Attached to truck " + it.attachedTruck);
+  if (it.safeToMove != null && it.safeToMove !== "") bits.push("Safe to move: " + yn(it.safeToMove));
+  if (it.loaded != null && it.loaded !== "") bits.push("Loaded: " + yn(it.loaded) + (it.deliveryBy ? " — deliver by " + it.deliveryBy : ""));
+  if (it.neededBy) bits.push("Needed back in service by " + it.neededBy);
+  if (it.requestedBy) bits.push("Requested by " + it.requestedBy);
+  return bits.filter(Boolean).join("\n");
+};
+const guessKind = (m) => {
+  const s = ((m && (m.mime || m.name || m.url)) || String(m || "")).toLowerCase();
+  return /video|\.(mp4|mov|m4v|webm|avi)([?#]|$)/.test(s) ? "video" : "photo";
+};
+const intakeFiles = (it) =>
+  ((it && it.media) || [])
+    .map((m) => {
+      const url = typeof m === "string" ? m : m.url;
+      if (!url) return null;
+      return {
+        id: uid("f"),
+        kind: guessKind(m),
+        name: (typeof m === "object" && m.name) || url.split("/").pop().split("?")[0] || "attachment",
+        size: (typeof m === "object" && m.size) || 0,
+        mime: (typeof m === "object" && m.mime) || "",
+        url,
+        path: (typeof m === "object" && m.path) || "",
+        at: nowISO(),
+        by: (it && it.requestedBy) || "Telegram",
+      };
+    })
+    .filter(Boolean);
+
+function AddRepair({ vendors, statuses, defaultMinutes, onAddVendor, onSave, onClose, initial }) {
+  const [city, setCity] = useState(initial ? intakeCity(initial) : LOCATIONS[0]);
   const [vendorId, setVendorId] = useState("");
-  const [unitType, setType] = useState("Truck");
-  const [unitNumber, setUnit] = useState("");
+  const [unitType, setType] = useState(initial && /trailer/i.test(initial.unitType || "") ? "Trailer" : "Truck");
+  const [unitNumber, setUnit] = useState((initial && (initial.unitNumber || initial.trailerNumber || initial.truckNumber)) || "");
   const [ownership, setOwnership] = useState("GH");
   const [lessor, setLessor] = useState("");
-  const [issue, setIssue] = useState("");
+  const [issue, setIssue] = useState(intakeIssue(initial));
+  const [priority, setPriority] = useState(initial && [1, 2, 3].includes(Number(initial.priority)) ? Number(initial.priority) : 3);
   const [statusId, setStatus] = useState(statuses[0] ? statuses[0].id : "");
   const [when, setWhen] = useState(toLocalInput(nowISO()));
   const [remind, setRemind] = useState(String(defaultMinutes || 30));
   const [remindAt, setRemindAt] = useState("");
   const [parkIt, setParkIt] = useState(true);
-  const [location, setLocation] = useState("");
+  const [location, setLocation] = useState(initial && intakeCity(initial) === OTR ? String(initial.location || "") : "");
   const [newShop, setNewShop] = useState("");
   const [newShopAddr, setNewShopAddr] = useState("");
   const [poc, setPoc] = useState("");
@@ -2350,6 +2569,8 @@ function AddRepair({ vendors, statuses, defaultMinutes, onAddVendor, onSave, onC
       lessor: unitType === "Trailer" && ownership !== "GH" ? lessor.trim() : "",
       issue: issue.trim(),
       poc: poc.trim(),
+      priority,
+      files: intakeFiles(initial),
       statusId,
       reportedAt: when ? new Date(when).toISOString() : nowISO(),
       dueAt: onDate ? new Date(remindAt).toISOString() : Number(remind) > 0 ? inMinutes(Number(remind)) : null,
@@ -2361,6 +2582,12 @@ function AddRepair({ vendors, statuses, defaultMinutes, onAddVendor, onSave, onC
 
   return (
     <Sheet title="Report a unit down" onClose={onClose}>
+      {initial && (
+        <div className="note" style={{ margin: "0 0 14px" }}>
+          From the Telegram intake{initial.requestedBy ? " — requested by " + initial.requestedBy : ""}
+          {initial.date ? " on " + initial.date : ""}. Check the details, pick a shop, and it lands on the board.
+        </div>
+      )}
       <div className="field">
         <label className="lab">Unit type</label>
         <div className="seg-ctl">
@@ -2453,6 +2680,16 @@ function AddRepair({ vendors, statuses, defaultMinutes, onAddVendor, onSave, onC
       <div className="field">
         <label className="lab">Issue</label>
         <textarea className="ta" value={issue} placeholder="What's wrong, and is it out of service?" onChange={(e) => setIssue(e.target.value)} />
+      </div>
+      <div className="field">
+        <label className="lab">Priority</label>
+        <div className="seg-ctl">
+          {PRIORITIES.map((p) => (
+            <button key={p.p} aria-pressed={priority === p.p} onClick={() => setPriority(p.p)}>
+              {p.p} — {p.label}
+            </button>
+          ))}
+        </div>
       </div>
       <div className="field">
         <label className="lab">POC — point of contact (optional)</label>
@@ -2934,7 +3171,7 @@ function Archive({ archive, vendors, onRestore, onPurge, onClose }) {
 function ExportCsv({ repairs, archive, vendorOf, statusOf, onClose }) {
   const [copied, setCopied] = useState(false);
   const csv = useMemo(() => {
-    const head = ["Location", "Breakdown location", "Shop", "Shop address", "POC", "Unit type", "Unit number", "Ownership", "Lessor / rental co", "Issue", "Status", "Reported", "Last follow-up", "Follow-ups", "Claimed by", "Reminder due", "Parked", "Plan status", "Plan of action", "Approved by", "Files", "Hours down", "Repaired"];
+    const head = ["Location", "Breakdown location", "Shop", "Shop address", "POC", "Priority", "Unit type", "Unit number", "Ownership", "Lessor / rental co", "Issue", "Status", "Approved by", "Reported", "Last follow-up", "Follow-ups", "Claimed by", "Reminder due", "Parked", "Plan status", "Plan of action", "Plan approved by", "Files", "Hours down", "Repaired"];
     const esc = (v) => '"' + String(v == null ? "" : v).replace(/"/g, '""') + '"';
     const line = (r, done) =>
       [
@@ -2943,12 +3180,14 @@ function ExportCsv({ repairs, archive, vendorOf, statusOf, onClose }) {
         vendorOf(r.vendorId).name,
         vendorOf(r.vendorId).address || "",
         r.poc || "",
+        prioOf(r) + " — " + PRIO_LABEL[prioOf(r)],
         r.unitType,
         r.unitNumber,
         ownOf(r),
         r.lessor || "",
         r.issue,
         statusOf(r.statusId).label,
+        r.approver || "",
         stamp(r.reportedAt),
         r.followUps && r.followUps.length ? stamp(lastTouch(r)) : "none",
         (r.followUps || []).length,
