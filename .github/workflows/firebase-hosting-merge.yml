@@ -1,5 +1,9 @@
-# Auto-deploy the app to Firebase Hosting whenever code lands on `main`.
+# Auto-deploy both sites to Firebase Hosting whenever code lands on `main`.
 # This replaces the old "push to main -> Netlify deploys" flow.
+#
+# Two sites, one project (ghlogistics-driver-hub):
+#   hub    -> public/       -> https://ghlogistics-driver-hub.firebaseapp.com
+#   repair -> repair-site/  -> https://fleet-repair-ctdashboard.firebaseapp.com
 #
 # One-time setup (done in web consoles, no terminal needed):
 #   1. Firebase console -> Project settings -> Service accounts ->
@@ -8,8 +12,6 @@
 #      "New repository secret":
 #        Name:  FIREBASE_SERVICE_ACCOUNT_GHLOGISTICS
 #        Value: paste the entire contents of that .json file
-# After that, every merge/push to `main` publishes to
-# https://ghlogistics-driver-hub.web.app automatically.
 
 name: Deploy to Firebase Hosting on merge
 
@@ -23,9 +25,34 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - uses: FirebaseExtended/action-hosting-deploy@v0
+
+      # One-time, then a no-op: make sure the repair dashboard's hosting
+      # site exists before deploying to it.
+      - name: Ensure fleet-repair-ctdashboard site exists
+        env:
+          SA_JSON: ${{ secrets.FIREBASE_SERVICE_ACCOUNT_GHLOGISTICS }}
+        run: |
+          printf '%s' "$SA_JSON" > "$RUNNER_TEMP/sa.json"
+          export GOOGLE_APPLICATION_CREDENTIALS="$RUNNER_TEMP/sa.json"
+          npx firebase-tools@13 hosting:sites:create fleet-repair-ctdashboard \
+            --project ghlogistics-driver-hub \
+            || echo "Site already exists - nothing to do."
+          rm -f "$RUNNER_TEMP/sa.json"
+
+      - name: Deploy Driver Hub
+        uses: FirebaseExtended/action-hosting-deploy@v0
         with:
           repoToken: ${{ secrets.GITHUB_TOKEN }}
           firebaseServiceAccount: ${{ secrets.FIREBASE_SERVICE_ACCOUNT_GHLOGISTICS }}
           channelId: live
           projectId: ghlogistics-driver-hub
+          target: hub
+
+      - name: Deploy Repair CT Dashboard
+        uses: FirebaseExtended/action-hosting-deploy@v0
+        with:
+          repoToken: ${{ secrets.GITHUB_TOKEN }}
+          firebaseServiceAccount: ${{ secrets.FIREBASE_SERVICE_ACCOUNT_GHLOGISTICS }}
+          channelId: live
+          projectId: ghlogistics-driver-hub
+          target: repair

@@ -34,15 +34,24 @@ no build step). It uses **Firebase** as its backend and falls back to browser
 
 ## Project structure
 
+Two sites deploy from this repo (both on the same Firebase project):
+
+| Site | Folder | Live URL |
+|---|---|---|
+| Driver Hub | `public/` | https://ghlogistics-driver-hub.firebaseapp.com |
+| Repair CT Dashboard | `repair-site/` | https://fleet-repair-ctdashboard.firebaseapp.com |
+
 ```
 .
 ├── public/
-│   ├── index.html      # The entire app (HTML/CSS/JS in one file)
+│   ├── index.html      # Driver Hub (HTML/CSS/JS in one file)
 │   └── repair/
-│       └── index.html  # Repair CT Dashboard (repair board, self-contained)
-├── netlify.toml        # Netlify build/redirect config
-├── firebase.json       # Firebase Hosting config (alternate host)
-├── .firebaserc         # Firebase project reference
+│       └── index.html  # redirect stub to the Repair CT Dashboard's URL
+├── repair-site/
+│   └── index.html      # Repair CT Dashboard (repair board, self-contained)
+├── netlify.toml        # Legacy Netlify config (retired)
+├── firebase.json       # Firebase Hosting config (both sites, via targets)
+├── .firebaserc         # Firebase project + hosting-target mapping
 ├── package.json        # Convenience scripts
 └── README.md
 ```
