@@ -136,6 +136,21 @@ window.deleteRepairFile = function(path){
   if (!storageSvc || !path) return Promise.resolve();
   return storageSvc.ref().child(path).delete().catch(function(){ /* already gone */ });
 };
+
+/* ---- outgoing mail ----
+   A static page can't send email itself. This writes a document to the
+   `mail` collection, which is the exact format the Firebase extension
+   "Trigger Email from Firestore" watches — it picks the doc up and sends
+   it. Until that extension is installed the docs just queue up harmlessly
+   and no mail goes out. Setup steps are in EMAIL-SETUP.md at the repo root. */
+window.queueEmail = function(to, subject, html, text){
+  return db.collection('mail').add({
+    to: to,
+    message: { subject: subject, html: html, text: text || '' },
+    queuedAt: new Date().toISOString(),
+    queuedBy: currentUser ? currentUser.email : ''
+  });
+};
 </script>
 <script type="text/babel" data-presets="react">
 const { useState, useEffect, useMemo, useRef, useCallback } = React;
@@ -179,6 +194,70 @@ const TONE_LABEL = {
   wait: "Waiting on someone",
   alert: "Needs attention",
 };
+
+/* Who gets an email when a plan of action is submitted.
+   Edit this list to change the group — nothing else needs to change. */
+const PLAN_NOTIFY = [
+  "Alfred@ghlogisticsllc.com",
+  "Caleb@ghlogisticsllc.com",
+  "Derrick@ghlogisticsllc.com",
+  "Anna@ghlogisticsllc.com",
+  "Andrea.b@ghlogisticsllc.com",
+];
+const BOARD_URL = "https://fleet-repair-ctdashboard.firebaseapp.com/";
+
+const esc = (s) =>
+  String(s == null ? "" : s).replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
+
+/* the plain-text body, reused for both the queued email and the
+   mailto fallback */
+const planEmailText = (r, shop, plan, who) =>
+  [
+    "A plan of action was submitted and needs review.",
+    "",
+    "Unit:      " + (r.unitNumber || "") + " (" + (r.unitType || "") + ")",
+    "Shop:      " + (shop || "Pending — not decided yet"),
+    "Location:  " + (r.city === OTR ? r.location || "OTR" : r.city || ""),
+    "Priority:  " + prioOf(r) + " — " + PRIO_LABEL[prioOf(r)],
+    "Issue:     " + (r.issue || ""),
+    "Down:      " + elapsed(r.reportedAt),
+    r.poc ? "POC:       " + r.poc : "",
+    "",
+    "Submitted by: " + (who || "someone on the board"),
+    "",
+    "PLAN OF ACTION",
+    plan || "",
+    "",
+    "Review and approve it here: " + BOARD_URL,
+  ]
+    .filter((l) => l !== "")
+    .join("\n");
+
+const planEmailHtml = (r, shop, plan, who) =>
+  '<div style="font-family:system-ui,-apple-system,Segoe UI,Roboto,sans-serif;font-size:14px;color:#131C26;line-height:1.5">' +
+  '<p style="margin:0 0 14px"><strong>A plan of action was submitted and needs review.</strong></p>' +
+  '<table cellpadding="4" style="border-collapse:collapse;font-size:14px;margin-bottom:14px">' +
+  ["Unit", esc(r.unitNumber) + " (" + esc(r.unitType) + ")",
+   "Shop", esc(shop || "Pending — not decided yet"),
+   "Location", esc(r.city === OTR ? r.location || "OTR" : r.city),
+   "Priority", esc(prioOf(r) + " — " + PRIO_LABEL[prioOf(r)]),
+   "Issue", esc(r.issue),
+   "Down", esc(elapsed(r.reportedAt)),
+   "Submitted by", esc(who || "someone on the board")]
+    .reduce((rows, cell, i, all) => (i % 2 ? rows : rows.concat(
+      '<tr><td style="color:#6C7C8C;padding-right:12px;vertical-align:top">' + cell +
+      '</td><td><strong>' + all[i + 1] + "</strong></td></tr>")), [])
+    .join("") +
+  "</table>" +
+  '<div style="border-left:3px solid #1B4F87;padding:2px 0 2px 12px;margin:0 0 16px;white-space:pre-wrap">' +
+  esc(plan) + "</div>" +
+  '<p style="margin:0"><a href="' + BOARD_URL + '" style="background:#1B4F87;color:#fff;text-decoration:none;' +
+  'padding:9px 16px;border-radius:5px;display:inline-block">Review it on the board</a></p></div>';
+
+const planMailto = (r, shop, plan, who) =>
+  "mailto:" + PLAN_NOTIFY.join(",") +
+  "?subject=" + encodeURIComponent("Plan of action — " + (r.unitNumber || "unit") + " at " + (shop || "pending shop")) +
+  "&body=" + encodeURIComponent(planEmailText(r, shop, plan, who));
 
 /* priority */
 const PRIORITIES = [
@@ -795,6 +874,17 @@ const CSS = `
 .autosave{margin-top:10px; padding:7px 10px; border-radius:5px; background:rgba(44,115,85,.09);
   border:1px solid rgba(44,115,85,.25); color:var(--ink-2);}
 
+/* transient banner (plan email queued, etc.) */
+.notice-pop{position:fixed; top:14px; left:50%; transform:translateX(-50%); z-index:900;
+  display:flex; align-items:center; gap:12px; max-width:min(620px,94vw);
+  background:var(--card); border:1px solid var(--rule); border-left:4px solid var(--green);
+  border-radius:7px; padding:11px 14px; font-size:13.5px; color:var(--ink);
+  box-shadow:0 8px 26px rgba(19,28,38,.22);}
+.notice-pop.bad{border-left-color:var(--red);}
+.notice-pop .x{border:0; background:none; font-size:19px; line-height:1; color:var(--muted);
+  cursor:pointer; padding:0 2px;}
+.notice-pop a.btn{text-decoration:none; white-space:nowrap;}
+
 /* follow-up note editing */
 .hist-acts{margin-left:8px; display:inline-flex; gap:10px; vertical-align:baseline;}
 .hlink{border:0; background:none; padding:0; font-size:12px; color:var(--blue); text-decoration:underline; cursor:pointer;}
@@ -873,9 +963,17 @@ function RepairBoard() {
   const [shut, setShut] = useState({});
   const [modal, setModal] = useState(null); // 'add' | 'vendors' | 'statuses' | 'archive' | 'csv'
   const [prefs, setPrefs] = useState({ sound: true, defaultMinutes: 30, name: "" });
+  const [notice, setNotice] = useState(null); // transient banner, e.g. plan email queued
   const [, tick] = useState(0);
   const ref = useRef(data);
   ref.current = data;
+
+  /* the notice banner clears itself, but stays long enough to click through */
+  useEffect(() => {
+    if (!notice) return;
+    const t = setTimeout(() => setNotice(null), 12000);
+    return () => clearTimeout(t);
+  }, [notice]);
 
   /* one-second clock: live countdowns and aging */
   useEffect(() => {
@@ -1139,7 +1237,7 @@ function RepairBoard() {
     ...r,
     planLog: [...(r.planLog || []), { at: nowISO(), by: by || "someone", action, note: note || "" }].slice(-30),
   });
-  const savePlan = (id, text) =>
+  const savePlan = (id, text) => {
     commit((p) => ({
       ...p,
       repairs: p.repairs.map((r) => {
@@ -1158,6 +1256,34 @@ function RepairBoard() {
         return logPlan(base, revised ? "revised" : "plan", prefs.name);
       }),
     }));
+    /* tell the approvers a plan is waiting on them */
+    const r = ref.current.repairs.find((x) => x.id === id);
+    if (!r) return;
+    const shop = vendorOf(r.vendorId).name;
+    const who = prefs.name || "someone on the board";
+    const back = planMailto(r, shop, text, who);
+    window
+      .queueEmail(
+        PLAN_NOTIFY,
+        "Plan of action — " + (r.unitNumber || "unit") + " at " + shop,
+        planEmailHtml(r, shop, text, who),
+        planEmailText(r, shop, text, who)
+      )
+      .then(() =>
+        setNotice({
+          kind: "ok",
+          msg: "Plan submitted — notification queued for " + PLAN_NOTIFY.length + " people.",
+          href: back,
+        })
+      )
+      .catch(() =>
+        setNotice({
+          kind: "bad",
+          msg: "Plan saved, but the email could not be queued.",
+          href: back,
+        })
+      );
+  };
   const approvePlan = (id, note) =>
     commit((p) => ({
       ...p,
@@ -1329,6 +1455,18 @@ function RepairBoard() {
   return (
     <div className={"fb" + (dueList.length ? " has-tray" : "")}>
       <style>{CSS}</style>
+
+      {notice && (
+        <div className={"notice-pop " + notice.kind} role="status">
+          <span>{notice.msg}</span>
+          {notice.href && (
+            <a className="btn alt sm" href={notice.href} title="Opens your mail app with the message filled in">
+              Send it myself
+            </a>
+          )}
+          <button className="x" aria-label="Dismiss" onClick={() => setNotice(null)}>×</button>
+        </div>
+      )}
 
       <header className="mast">
         <div className="mast-top">
