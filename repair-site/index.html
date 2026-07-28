@@ -425,6 +425,10 @@ function stamp(iso) {
     d.toLocaleTimeString([], { hour: "numeric", minute: "2-digit" })
   );
 }
+/* date only — reported dates don't track the time of day */
+const stampDate = (iso) => new Date(iso).toLocaleDateString([], { month: "short", day: "numeric" });
+/* normalised unit number, for duplicate detection */
+const unitKey = (r) => String(r.unitNumber || "").trim().toUpperCase();
 
 const toLocalInput = (iso) => {
   const d = new Date(iso);
@@ -974,7 +978,7 @@ function RepairBoard() {
 
   const { repairs, vendors, statuses, archive } = data;
   const statusOf = (id) => statuses.find((s) => s.id === id) || { label: "Unassigned", tone: "neutral" };
-  const vendorOf = (id) => vendors.find((v) => v.id === id) || { name: "Unassigned shop", city: "" };
+  const vendorOf = (id) => vendors.find((v) => v.id === id) || { name: "Pending shop — not decided yet", city: "" };
 
   /* filtering */
   const visible = useMemo(() => {
@@ -1026,6 +1030,18 @@ function RepairBoard() {
     c[OTR] = repairs.filter((r) => r.city === OTR && !isParked(r)).length;
     return c;
   }, [repairs, Math.floor(Date.now() / 30000)]);
+
+  /* duplicate tracker — same unit number on the board more than once
+     (parked units count too; someone may have re-reported a parked unit) */
+  const dupUnits = useMemo(() => {
+    const seen = {};
+    repairs.forEach((r) => {
+      const k = unitKey(r);
+      if (k) seen[k] = (seen[k] || 0) + 1;
+    });
+    return new Set(Object.keys(seen).filter((k) => seen[k] > 1));
+  }, [repairs]);
+  const dupCount = useMemo(() => repairs.filter((r) => dupUnits.has(unitKey(r))).length, [repairs, dupUnits]);
 
   /* mutations */
   const addRepair = (r) => commit((p) => ({ ...p, repairs: [...p.repairs, r] }));
@@ -1253,6 +1269,7 @@ function RepairBoard() {
 
   const rowProps = (r) => ({
     r,
+    dup: dupUnits.has(unitKey(r)),
     status: statusOf(r.statusId),
     statuses,
     vendors,
@@ -1346,6 +1363,7 @@ function RepairBoard() {
           <div className="stat"><b>{parkedList.length}</b><s>Parked</s></div>
           <div className="stat"><b>{counts.truck} / {counts.trailer}</b><s>Trucks / trailers</s></div>
           <div className="stat"><b>{counts[OTR]}</b><s>On the road</s></div>
+          <div className={"stat" + (dupCount ? " bad" : "")} title="Same unit number on the board more than once"><b>{dupCount}</b><s>Duplicates</s></div>
           <div className="stat"><b>{counts.hire}</b><s>Leased / rented</s></div>
           <div className={"stat" + (counts.overdue ? " bad" : counts.stale ? " warn" : "")}>
             <b>{counts.stale} / {counts.overdue}</b>
@@ -1584,6 +1602,7 @@ function RepairBoard() {
           vendors={vendors}
           statuses={statuses}
           defaultMinutes={prefs.defaultMinutes}
+          existingUnits={new Set(repairs.map(unitKey).filter(Boolean))}
           onAddVendor={(v) => commit((p) => ({ ...p, vendors: [...p.vendors, v] }))}
           onSave={(r) => { addRepair(r); setModal(null); }}
           onClose={() => setModal(null)}
@@ -2098,7 +2117,7 @@ function Attachments({ r, me, onPatch }) {
   );
 }
 
-function Row({ r, status, statuses, vendors, defaultMinutes, me, expanded, showWhere, onSeen, onToggle, onPatch, onFollowUp, onEditFollowUp, onDeleteFollowUp, onTimer, onSilence, onClose, onSavePlan, onApprove, onChanges, onNeedName, onClaim, onRelease, onUnpark, team, onAddName }) {
+function Row({ r, dup, status, statuses, vendors, defaultMinutes, me, expanded, showWhere, onSeen, onToggle, onPatch, onFollowUp, onEditFollowUp, onDeleteFollowUp, onTimer, onSilence, onClose, onSavePlan, onApprove, onChanges, onNeedName, onClaim, onRelease, onUnpark, team, onAddName }) {
   const [note, setNote] = useState("");
   const [nextMin, setNextMin] = useState(String(defaultMinutes || 30));
   const [closing, setClosing] = useState(false);
@@ -2126,6 +2145,14 @@ function Row({ r, status, statuses, vendors, defaultMinutes, me, expanded, showW
           </span>
         )}
         <span className="unit">{r.unitNumber}</span>
+        {dup && (
+          <span className="chip alert" title="This unit number is on the board more than once — one of them probably needs to go">
+            ⚠ Duplicate
+          </span>
+        )}
+        {r.safeToDrive === false && (
+          <span className="chip alert" title="Marked not safe to drive">🚫 Not safe to drive</span>
+        )}
         {prioOf(r) < 3 && (
           <span className={"chip prio " + (prioOf(r) === 1 ? "alert" : "wait")} title={"Priority " + prioOf(r) + " — " + PRIO_LABEL[prioOf(r)]}>
             {prioOf(r) === 1 ? "⚠ Critical" : "High priority"}
@@ -2164,7 +2191,14 @@ function Row({ r, status, statuses, vendors, defaultMinutes, me, expanded, showW
             <b>{showWhere}</b> · {r.city === OTR ? r.location || "OTR" : r.city}
           </span>
         )}
-        <span className="meta">Reported <b>{stamp(r.reportedAt)}</b></span>
+        <span className="meta">Reported <b>{stampDate(r.reportedAt)}</b></span>
+        {r.requestedBy && <span className="meta">Requested by <b>{r.requestedBy}</b></span>}
+        {r.driver && <span className="meta">Driver <b>{r.driver}</b></span>}
+        {r.loadedTrailer && (
+          <span className="meta amber">
+            <b>Loaded trailer{r.deliveryAt ? " · deliver " + fmtDueShort(r.deliveryAt) : ""}</b>
+          </span>
+        )}
         {r.poc && <span className="meta">POC <b>{r.poc}</b></span>}
         {r.approver && <span className="meta">Approved by <b>{r.approver}</b></span>}
         <span className={"meta " + (band === "ok" ? "" : band)}>
@@ -2213,6 +2247,21 @@ function Row({ r, status, statuses, vendors, defaultMinutes, me, expanded, showW
           />
           <div className="dgrid" style={{ marginTop: 12 }}>
             <div>
+              <label className="lab">Unit type</label>
+              <select
+                className="sel"
+                value={r.unitType}
+                onChange={(e) => {
+                  const k = e.target.value;
+                  /* trucks are company-owned — switching clears trailer-only fields */
+                  onPatch(k === "Truck" ? { unitType: "Truck", ownership: "GH", lessor: "" } : { unitType: k });
+                }}
+              >
+                <option value="Truck">Truck</option>
+                <option value="Trailer">Trailer</option>
+              </select>
+            </div>
+            <div>
               <label className="lab">Status</label>
               <select className="sel" value={r.statusId} onChange={(e) => onPatch({ statusId: e.target.value })}>
                 {statuses.map((s) => <option key={s.id} value={s.id}>{s.label}</option>)}
@@ -2222,12 +2271,13 @@ function Row({ r, status, statuses, vendors, defaultMinutes, me, expanded, showW
               <label className="lab">Shop</label>
               <select
                 className="sel"
-                value={r.vendorId}
+                value={r.vendorId || ""}
                 onChange={(e) => {
                   const v = vendors.find((x) => x.id === e.target.value);
                   onPatch({ vendorId: e.target.value, city: v ? v.city : r.city });
                 }}
               >
+                <option value="">— Pending / not decided yet —</option>
                 {vendors.map((v) => <option key={v.id} value={v.id}>{v.name} — {v.city}</option>)}
               </select>
             </div>
@@ -2264,14 +2314,62 @@ function Row({ r, status, statuses, vendors, defaultMinutes, me, expanded, showW
               </div>
             )}
             <div>
-              <label className="lab">Reported at</label>
+              <label className="lab">Date reported</label>
               <input
                 className="inp"
-                type="datetime-local"
-                value={toLocalInput(r.reportedAt)}
-                onChange={(e) => e.target.value && onPatch({ reportedAt: new Date(e.target.value).toISOString() })}
+                type="date"
+                value={toLocalInput(r.reportedAt).slice(0, 10)}
+                onChange={(e) => e.target.value && onPatch({ reportedAt: new Date(e.target.value + "T12:00:00").toISOString() })}
               />
             </div>
+            <div>
+              <label className="lab">Requested by</label>
+              <input
+                className="inp"
+                value={r.requestedBy || ""}
+                placeholder="Who asked for this repair"
+                onChange={(e) => onPatch({ requestedBy: e.target.value })}
+              />
+            </div>
+            <div>
+              <label className="lab">Driver who reported (name / phone)</label>
+              <input
+                className="inp"
+                value={r.driver || ""}
+                placeholder="D. Sanchez — (210) 555-0000"
+                onChange={(e) => onPatch({ driver: e.target.value })}
+              />
+            </div>
+            <div>
+              <label className="lab">Condition</label>
+              <label className="meta" style={{ display: "flex", gap: 6, alignItems: "center", marginTop: 6 }}>
+                <input
+                  type="checkbox"
+                  checked={r.safeToDrive !== false}
+                  onChange={(e) => onPatch({ safeToDrive: e.target.checked })}
+                />
+                <span>Unit is safe to drive</span>
+              </label>
+              <label className="meta" style={{ display: "flex", gap: 6, alignItems: "center", marginTop: 6 }}>
+                <input
+                  type="checkbox"
+                  checked={!!r.loadedTrailer}
+                  onChange={(e) => onPatch({ loadedTrailer: e.target.checked })}
+                />
+                <span>Hooked to loaded trailer</span>
+              </label>
+            </div>
+            {r.loadedTrailer && (
+              <div>
+                <label className="lab">Delivery date / time</label>
+                <input
+                  className="inp"
+                  type="datetime-local"
+                  value={r.deliveryAt ? toLocalInput(r.deliveryAt) : ""}
+                  onChange={(e) => onPatch({ deliveryAt: e.target.value ? new Date(e.target.value).toISOString() : "" })}
+                />
+              </div>
+            )}
             <div>
               <label className="lab">Issue</label>
               <input className="inp" value={r.issue} onChange={(e) => onPatch({ issue: e.target.value })} />
@@ -2411,7 +2509,7 @@ function Sheet({ title, children, onClose, wide }) {
   );
 }
 
-function AddRepair({ vendors, statuses, defaultMinutes, onAddVendor, onSave, onClose }) {
+function AddRepair({ vendors, statuses, defaultMinutes, existingUnits, onAddVendor, onSave, onClose }) {
   const [city, setCity] = useState(LOCATIONS[0]);
   const [vendorId, setVendorId] = useState("");
   const [unitType, setType] = useState("Truck");
@@ -2420,8 +2518,13 @@ function AddRepair({ vendors, statuses, defaultMinutes, onAddVendor, onSave, onC
   const [lessor, setLessor] = useState("");
   const [issue, setIssue] = useState("");
   const [priority, setPriority] = useState(3);
+  const [requestedBy, setRequestedBy] = useState("");
+  const [driver, setDriver] = useState("");
+  const [safeToDrive, setSafeToDrive] = useState(true);
+  const [loadedTrailer, setLoadedTrailer] = useState(false);
+  const [deliveryAt, setDeliveryAt] = useState("");
   const [statusId, setStatus] = useState(statuses[0] ? statuses[0].id : "");
-  const [when, setWhen] = useState(toLocalInput(nowISO()));
+  const [when, setWhen] = useState(toLocalInput(nowISO()).slice(0, 10));
   const [remind, setRemind] = useState(String(defaultMinutes || 30));
   const [remindAt, setRemindAt] = useState("");
   const [parkIt, setParkIt] = useState(true);
@@ -2450,7 +2553,6 @@ function AddRepair({ vendors, statuses, defaultMinutes, onAddVendor, onSave, onC
   const save = () => {
     if (!unitNumber.trim()) return setErr("Enter the unit number.");
     if (isOtr && !location.trim()) return setErr("Enter where the unit is — town and state, or highway and mile marker.");
-    if (!vendorId) return setErr("Pick a shop, or add one below.");
     if (!issue.trim()) return setErr("Add a short description of the issue.");
     if (remind === "date" && !remindAt) return setErr("Pick the date you expect an update.");
     const onDate = remind === "date";
@@ -2466,8 +2568,13 @@ function AddRepair({ vendors, statuses, defaultMinutes, onAddVendor, onSave, onC
       issue: issue.trim(),
       poc: poc.trim(),
       priority,
+      requestedBy: requestedBy.trim(),
+      driver: driver.trim(),
+      safeToDrive,
+      loadedTrailer,
+      deliveryAt: loadedTrailer && deliveryAt ? new Date(deliveryAt).toISOString() : "",
       statusId,
-      reportedAt: when ? new Date(when).toISOString() : nowISO(),
+      reportedAt: when ? new Date(when + "T12:00:00").toISOString() : nowISO(),
       dueAt: onDate ? new Date(remindAt).toISOString() : Number(remind) > 0 ? inMinutes(Number(remind)) : null,
       parked: onDate ? parkIt : false,
       dueAck: false,
@@ -2515,7 +2622,26 @@ function AddRepair({ vendors, statuses, defaultMinutes, onAddVendor, onSave, onC
       <div className="grid2">
         <div className="field">
           <label className="lab">Unit number</label>
-          <input className="inp mono" value={unitNumber} placeholder="T-4417" onChange={(e) => setUnit(e.target.value)} />
+          <input
+            className="inp mono"
+            value={unitNumber}
+            placeholder="T-4417"
+            onChange={(e) => {
+              const v = e.target.value;
+              setUnit(v);
+              /* 400- and 700-series units are always trucks */
+              if (/^[47]\d\d$/.test(v.trim())) {
+                setType("Truck");
+                setOwnership("GH");
+                setLessor("");
+              }
+            }}
+          />
+          {existingUnits && existingUnits.has(unitNumber.trim().toUpperCase()) && (
+            <div className="err" style={{ marginTop: 6 }}>
+              ⚠ {unitNumber.trim().toUpperCase()} is already on the board — adding it again will flag both as duplicates.
+            </div>
+          )}
         </div>
         <div className="field">
           <label className="lab">Where it's assigned</label>
@@ -2538,13 +2664,13 @@ function AddRepair({ vendors, statuses, defaultMinutes, onAddVendor, onSave, onC
       )}
       <div className="field">
         <label className="lab">{isOtr ? "Road service or shop" : "Shop"}</label>
-        {cityShops.length ? (
-          <select className="sel" value={vendorId} onChange={(e) => setVendorId(e.target.value)}>
-            {cityShops.map((v) => <option key={v.id} value={v.id}>{v.name}</option>)}
-          </select>
-        ) : (
-          <div className="meta">
-            {isOtr ? "No road service vendors on file yet — add one below." : "No shops on file in " + city + " yet — add one below."}
+        <select className="sel" value={vendorId} onChange={(e) => setVendorId(e.target.value)}>
+          <option value="">— Pending / not decided yet —</option>
+          {cityShops.map((v) => <option key={v.id} value={v.id}>{v.name}</option>)}
+        </select>
+        {!vendorId && (
+          <div className="meta" style={{ marginTop: 6 }}>
+            No shop picked — it goes on the board under "Pending shop" and you can assign one later from Edit.
           </div>
         )}
         <div style={{ display: "flex", gap: 8, marginTop: 8 }}>
@@ -2569,6 +2695,32 @@ function AddRepair({ vendors, statuses, defaultMinutes, onAddVendor, onSave, onC
       <div className="field">
         <label className="lab">Issue</label>
         <textarea className="ta" value={issue} placeholder="What's wrong, and is it out of service?" onChange={(e) => setIssue(e.target.value)} />
+      </div>
+      <div className="grid2">
+        <div className="field">
+          <label className="lab">Requested by</label>
+          <input className="inp" value={requestedBy} placeholder="Who asked for this repair" onChange={(e) => setRequestedBy(e.target.value)} />
+        </div>
+        <div className="field">
+          <label className="lab">Driver who reported (name / phone)</label>
+          <input className="inp" value={driver} placeholder="D. Sanchez — (210) 555-0000" onChange={(e) => setDriver(e.target.value)} />
+        </div>
+      </div>
+      <div className="field">
+        <label className="meta" style={{ display: "flex", gap: 6, alignItems: "center" }}>
+          <input type="checkbox" checked={safeToDrive} onChange={(e) => setSafeToDrive(e.target.checked)} />
+          <span>Unit is safe to drive</span>
+        </label>
+        <label className="meta" style={{ display: "flex", gap: 6, alignItems: "center", marginTop: 7 }}>
+          <input type="checkbox" checked={loadedTrailer} onChange={(e) => setLoadedTrailer(e.target.checked)} />
+          <span>Unit is hooked to a loaded trailer</span>
+        </label>
+        {loadedTrailer && (
+          <div style={{ marginTop: 8 }}>
+            <label className="lab">Delivery date / time</label>
+            <input className="inp" type="datetime-local" value={deliveryAt} onChange={(e) => setDeliveryAt(e.target.value)} />
+          </div>
+        )}
       </div>
       <div className="field">
         <label className="lab">Priority</label>
@@ -2597,8 +2749,8 @@ function AddRepair({ vendors, statuses, defaultMinutes, onAddVendor, onSave, onC
           </select>
         </div>
         <div className="field">
-          <label className="lab">Time reported</label>
-          <input className="inp" type="datetime-local" value={when} onChange={(e) => setWhen(e.target.value)} />
+          <label className="lab">Date reported</label>
+          <input className="inp" type="date" value={when} onChange={(e) => setWhen(e.target.value)} />
         </div>
       </div>
       <div className="field">
@@ -3041,7 +3193,7 @@ function Archive({ archive, vendors, onRestore, onPurge, onClose }) {
                 <div className="nm mono">{r.unitNumber} <span style={{ fontWeight: 400 }}>· {tracksOwnership(r) ? ownOf(r) + " " : ""}{r.unitType} · {r.city}{r.location ? " (" + r.location + ")" : ""}</span></div>
                 <div className="sub">{vname(r.vendorId)}{r.lessor ? " · " + r.lessor : ""} — {r.issue}</div>
                 <div className="sub mono">
-                  reported {stamp(r.reportedAt)} · repaired {stamp(r.repairedAt)}
+                  reported {stampDate(r.reportedAt)} · repaired {stamp(r.repairedAt)}
                   {r.closeNote ? " · " + r.closeNote : ""}
                 </div>
               </div>
@@ -3060,7 +3212,7 @@ function Archive({ archive, vendors, onRestore, onPurge, onClose }) {
 function ExportCsv({ repairs, archive, vendorOf, statusOf, onClose }) {
   const [copied, setCopied] = useState(false);
   const csv = useMemo(() => {
-    const head = ["Location", "Breakdown location", "Shop", "Shop address", "POC", "Priority", "Unit type", "Unit number", "Ownership", "Lessor / rental co", "Issue", "Status", "Approved by", "Reported", "Last follow-up", "Follow-ups", "Claimed by", "Reminder due", "Parked", "Plan status", "Plan of action", "Plan approved by", "Files", "Hours down", "Repaired"];
+    const head = ["Location", "Breakdown location", "Shop", "Shop address", "POC", "Priority", "Unit type", "Unit number", "Ownership", "Lessor / rental co", "Issue", "Status", "Approved by", "Requested by", "Driver who reported", "Safe to drive", "Loaded trailer", "Delivery", "Reported", "Last follow-up", "Follow-ups", "Claimed by", "Reminder due", "Parked", "Plan status", "Plan of action", "Plan approved by", "Files", "Hours down", "Repaired"];
     const esc = (v) => '"' + String(v == null ? "" : v).replace(/"/g, '""') + '"';
     const line = (r, done) =>
       [
@@ -3077,7 +3229,12 @@ function ExportCsv({ repairs, archive, vendorOf, statusOf, onClose }) {
         r.issue,
         statusOf(r.statusId).label,
         r.approver || "",
-        stamp(r.reportedAt),
+        r.requestedBy || "",
+        r.driver || "",
+        r.safeToDrive === false ? "NO" : r.safeToDrive === true ? "YES" : "",
+        r.loadedTrailer ? "YES" : "NO",
+        r.deliveryAt ? stamp(r.deliveryAt) : "",
+        stampDate(r.reportedAt),
         r.followUps && r.followUps.length ? stamp(lastTouch(r)) : "none",
         (r.followUps || []).length,
         claimedBy(r),
