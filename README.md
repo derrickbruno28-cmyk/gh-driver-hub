@@ -37,7 +37,9 @@ no build step). It uses **Firebase** as its backend and falls back to browser
 ```
 .
 ├── public/
-│   └── index.html      # The entire app (HTML/CSS/JS in one file)
+│   ├── index.html      # The entire app (HTML/CSS/JS in one file)
+│   └── repair/
+│       └── index.html  # Repair CT Dashboard (repair board, self-contained)
 ├── netlify.toml        # Netlify build/redirect config
 ├── firebase.json       # Firebase Hosting config (alternate host)
 ├── .firebaserc         # Firebase project reference
