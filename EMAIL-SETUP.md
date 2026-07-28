@@ -1,9 +1,16 @@
 # Turning on plan-of-action emails
 
-The Repair CT Dashboard already does its half of the job: **every time someone
-submits a plan of action, the board writes an email into a Firestore collection
-called `mail`.** You can see them piling up in the Firebase console under
-Firestore → `mail`.
+The Repair CT Dashboard already does its half of the job: **on every plan-of-action
+decision, the board writes an email into a Firestore collection called `mail`.**
+You can see them piling up in the Firebase console under Firestore → `mail`.
+
+Three events send mail, all to the same group:
+
+| Event | Subject line | Includes |
+|---|---|---|
+| Plan **submitted** | `Plan of action submitted — …` | the plan, unit details, who submitted |
+| Plan **approved** | `Plan of action APPROVED — …` | the plan, who approved, any note |
+| **Changes requested** | `Plan of action — CHANGES REQUESTED — …` | what needs to change, plus the plan |
 
 Nothing actually *sends* those yet. A web page can't send email on its own —
 something server-side has to pick the message up and hand it to a mail server.
@@ -60,6 +67,7 @@ company-mailbox password involved):
 ### 3. Test it
 
 1. Open the board, pick any repair, write a short plan, hit **Submit plan**
+   (then try **Approve plan** and **Request changes** too)
 2. You should see "Plan submitted — notification queued for 5 people."
 3. Within a minute the five addresses get the email
 4. If it doesn't arrive: Firebase console → Firestore → `mail` → open the newest

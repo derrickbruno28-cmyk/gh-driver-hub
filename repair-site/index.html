@@ -209,11 +209,40 @@ const BOARD_URL = "https://fleet-repair-ctdashboard.firebaseapp.com/";
 const esc = (s) =>
   String(s == null ? "" : s).replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
 
+/* the three things worth emailing the group about */
+const MAIL_KINDS = {
+  submitted: {
+    subject: "Plan of action submitted",
+    lead: "A plan of action was submitted and needs review.",
+    byLabel: "Submitted by",
+    accent: "#1B4F87",
+    cta: "Review it on the board",
+  },
+  approved: {
+    subject: "Plan of action APPROVED",
+    lead: "A plan of action was approved — the shop is clear to proceed.",
+    byLabel: "Approved by",
+    accent: "#2C7355",
+    cta: "Open it on the board",
+  },
+  changes: {
+    subject: "Plan of action — CHANGES REQUESTED",
+    lead: "Changes were requested on a plan of action. It needs another pass.",
+    byLabel: "Sent back by",
+    accent: "#D08A0C",
+    cta: "Open it on the board",
+  },
+};
+
+const planEmailSubject = (kind, r, shop) =>
+  MAIL_KINDS[kind].subject + " — " + (r.unitNumber || "unit") + " at " + (shop || "pending shop");
+
 /* the plain-text body, reused for both the queued email and the
    mailto fallback */
-const planEmailText = (r, shop, plan, who) =>
-  [
-    "A plan of action was submitted and needs review.",
+const planEmailText = (kind, r, shop, plan, who, note) => {
+  const k = MAIL_KINDS[kind];
+  return [
+    k.lead,
     "",
     "Unit:      " + (r.unitNumber || "") + " (" + (r.unitType || "") + ")",
     "Shop:      " + (shop || "Pending — not decided yet"),
@@ -223,41 +252,56 @@ const planEmailText = (r, shop, plan, who) =>
     "Down:      " + elapsed(r.reportedAt),
     r.poc ? "POC:       " + r.poc : "",
     "",
-    "Submitted by: " + (who || "someone on the board"),
+    k.byLabel + ": " + (who || "someone on the board"),
+    note ? "" : null,
+    note ? (kind === "changes" ? "WHAT NEEDS TO CHANGE" : "NOTE") : null,
+    note || null,
     "",
     "PLAN OF ACTION",
     plan || "",
     "",
-    "Review and approve it here: " + BOARD_URL,
+    k.cta + ": " + BOARD_URL,
   ]
-    .filter((l) => l !== "")
+    .filter((l) => l !== "" && l !== null)
     .join("\n");
+};
 
-const planEmailHtml = (r, shop, plan, who) =>
-  '<div style="font-family:system-ui,-apple-system,Segoe UI,Roboto,sans-serif;font-size:14px;color:#131C26;line-height:1.5">' +
-  '<p style="margin:0 0 14px"><strong>A plan of action was submitted and needs review.</strong></p>' +
-  '<table cellpadding="4" style="border-collapse:collapse;font-size:14px;margin-bottom:14px">' +
-  ["Unit", esc(r.unitNumber) + " (" + esc(r.unitType) + ")",
-   "Shop", esc(shop || "Pending — not decided yet"),
-   "Location", esc(r.city === OTR ? r.location || "OTR" : r.city),
-   "Priority", esc(prioOf(r) + " — " + PRIO_LABEL[prioOf(r)]),
-   "Issue", esc(r.issue),
-   "Down", esc(elapsed(r.reportedAt)),
-   "Submitted by", esc(who || "someone on the board")]
-    .reduce((rows, cell, i, all) => (i % 2 ? rows : rows.concat(
-      '<tr><td style="color:#6C7C8C;padding-right:12px;vertical-align:top">' + cell +
-      '</td><td><strong>' + all[i + 1] + "</strong></td></tr>")), [])
-    .join("") +
-  "</table>" +
-  '<div style="border-left:3px solid #1B4F87;padding:2px 0 2px 12px;margin:0 0 16px;white-space:pre-wrap">' +
-  esc(plan) + "</div>" +
-  '<p style="margin:0"><a href="' + BOARD_URL + '" style="background:#1B4F87;color:#fff;text-decoration:none;' +
-  'padding:9px 16px;border-radius:5px;display:inline-block">Review it on the board</a></p></div>';
+const planEmailHtml = (kind, r, shop, plan, who, note) => {
+  const k = MAIL_KINDS[kind];
+  return (
+    '<div style="font-family:system-ui,-apple-system,Segoe UI,Roboto,sans-serif;font-size:14px;color:#131C26;line-height:1.5">' +
+    '<p style="margin:0 0 14px"><strong style="color:' + k.accent + '">' + esc(k.lead) + "</strong></p>" +
+    '<table cellpadding="4" style="border-collapse:collapse;font-size:14px;margin-bottom:14px">' +
+    ["Unit", esc(r.unitNumber) + " (" + esc(r.unitType) + ")",
+     "Shop", esc(shop || "Pending — not decided yet"),
+     "Location", esc(r.city === OTR ? r.location || "OTR" : r.city),
+     "Priority", esc(prioOf(r) + " — " + PRIO_LABEL[prioOf(r)]),
+     "Issue", esc(r.issue),
+     "Down", esc(elapsed(r.reportedAt)),
+     k.byLabel, esc(who || "someone on the board")]
+      .reduce((rows, cell, i, all) => (i % 2 ? rows : rows.concat(
+        '<tr><td style="color:#6C7C8C;padding-right:12px;vertical-align:top">' + cell +
+        '</td><td><strong>' + all[i + 1] + "</strong></td></tr>")), [])
+      .join("") +
+    "</table>" +
+    (note
+      ? '<p style="margin:0 0 6px;color:#6C7C8C;font-size:12.5px;text-transform:uppercase;letter-spacing:.05em">' +
+        (kind === "changes" ? "What needs to change" : "Note") + "</p>" +
+        '<div style="border-left:3px solid ' + k.accent + ';padding:2px 0 2px 12px;margin:0 0 16px;white-space:pre-wrap">' +
+        esc(note) + "</div>"
+      : "") +
+    '<p style="margin:0 0 6px;color:#6C7C8C;font-size:12.5px;text-transform:uppercase;letter-spacing:.05em">Plan of action</p>' +
+    '<div style="border-left:3px solid #D4DBE3;padding:2px 0 2px 12px;margin:0 0 16px;white-space:pre-wrap">' +
+    esc(plan) + "</div>" +
+    '<p style="margin:0"><a href="' + BOARD_URL + '" style="background:' + k.accent + ';color:#fff;text-decoration:none;' +
+    'padding:9px 16px;border-radius:5px;display:inline-block">' + esc(k.cta) + "</a></p></div>"
+  );
+};
 
-const planMailto = (r, shop, plan, who) =>
+const planMailto = (kind, r, shop, plan, who, note) =>
   "mailto:" + PLAN_NOTIFY.join(",") +
-  "?subject=" + encodeURIComponent("Plan of action — " + (r.unitNumber || "unit") + " at " + (shop || "pending shop")) +
-  "&body=" + encodeURIComponent(planEmailText(r, shop, plan, who));
+  "?subject=" + encodeURIComponent(planEmailSubject(kind, r, shop)) +
+  "&body=" + encodeURIComponent(planEmailText(kind, r, shop, plan, who, note));
 
 /* priority */
 const PRIORITIES = [
@@ -1237,6 +1281,31 @@ function RepairBoard() {
     ...r,
     planLog: [...(r.planLog || []), { at: nowISO(), by: by || "someone", action, note: note || "" }].slice(-30),
   });
+  /* keep the group in the loop on every plan decision. Reads the repair
+     after the commit, so the mail always reflects what was just saved. */
+  const notifyPlan = (kind, id, note) => {
+    const r = ref.current.repairs.find((x) => x.id === id);
+    if (!r) return;
+    const shop = vendorOf(r.vendorId).name;
+    const who = prefs.name || "someone on the board";
+    const plan = r.plan || "";
+    const back = planMailto(kind, r, shop, plan, who, note);
+    const what = kind === "approved" ? "Plan approved" : kind === "changes" ? "Changes requested" : "Plan submitted";
+    window
+      .queueEmail(
+        PLAN_NOTIFY,
+        planEmailSubject(kind, r, shop),
+        planEmailHtml(kind, r, shop, plan, who, note),
+        planEmailText(kind, r, shop, plan, who, note)
+      )
+      .then(() =>
+        setNotice({ kind: "ok", msg: what + " — notification queued for " + PLAN_NOTIFY.length + " people.", href: back })
+      )
+      .catch(() =>
+        setNotice({ kind: "bad", msg: what + " saved, but the email could not be queued.", href: back })
+      );
+  };
+
   const savePlan = (id, text) => {
     commit((p) => ({
       ...p,
@@ -1256,35 +1325,9 @@ function RepairBoard() {
         return logPlan(base, revised ? "revised" : "plan", prefs.name);
       }),
     }));
-    /* tell the approvers a plan is waiting on them */
-    const r = ref.current.repairs.find((x) => x.id === id);
-    if (!r) return;
-    const shop = vendorOf(r.vendorId).name;
-    const who = prefs.name || "someone on the board";
-    const back = planMailto(r, shop, text, who);
-    window
-      .queueEmail(
-        PLAN_NOTIFY,
-        "Plan of action — " + (r.unitNumber || "unit") + " at " + shop,
-        planEmailHtml(r, shop, text, who),
-        planEmailText(r, shop, text, who)
-      )
-      .then(() =>
-        setNotice({
-          kind: "ok",
-          msg: "Plan submitted — notification queued for " + PLAN_NOTIFY.length + " people.",
-          href: back,
-        })
-      )
-      .catch(() =>
-        setNotice({
-          kind: "bad",
-          msg: "Plan saved, but the email could not be queued.",
-          href: back,
-        })
-      );
+    notifyPlan("submitted", id);
   };
-  const approvePlan = (id, note) =>
+  const approvePlan = (id, note) => {
     commit((p) => ({
       ...p,
       repairs: p.repairs.map((r) =>
@@ -1298,7 +1341,9 @@ function RepairBoard() {
           : r
       ),
     }));
-  const requestChanges = (id, note) =>
+    notifyPlan("approved", id, note);
+  };
+  const requestChanges = (id, note) => {
     commit((p) => ({
       ...p,
       repairs: p.repairs.map((r) =>
@@ -1307,6 +1352,8 @@ function RepairBoard() {
           : r
       ),
     }));
+    notifyPlan("changes", id, note);
+  };
 
   const needsApproval = useMemo(() => repairs.filter((r) => planState(r) === "submitted"), [repairs]);
   const needsPlan = useMemo(() => repairs.filter((r) => planState(r) === "none"), [repairs]);
