@@ -2629,8 +2629,8 @@ function AddRepair({ vendors, statuses, defaultMinutes, existingUnits, onAddVend
             onChange={(e) => {
               const v = e.target.value;
               setUnit(v);
-              /* 400- and 700-series units are always trucks */
-              if (/^[47]\d\d$/.test(v.trim())) {
+              /* 400-, 700-, and 900-series units are trucks */
+              if (/^[479]\d\d$/.test(v.trim())) {
                 setType("Truck");
                 setOwnership("GH");
                 setLessor("");
