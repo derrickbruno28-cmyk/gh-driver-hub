@@ -638,6 +638,7 @@ const CSS = `
 .inp, .sel, .ta{font-family:'IBM Plex Sans',sans-serif; font-size:14px; color:var(--ink);
   background:#fff; border:1px solid var(--rule); border-radius:2px; padding:8px 10px; width:100%;}
 .ta{resize:vertical; min-height:64px;}
+.ta.grow{overflow:hidden; resize:none; line-height:1.45;}
 .search{max-width:230px;}
 
 .btn{border:1px solid var(--ink); background:var(--ink); color:#fff; border-radius:2px;
@@ -769,6 +770,14 @@ const CSS = `
 .tray-row .s{color:#B9C7D4; font-size:13px;}
 .tray-row .ov{font-family:'IBM Plex Mono',monospace; font-size:12px; color:#FF9B8C; font-weight:600;}
 .tray-row .ta{margin-left:auto; display:flex; gap:6px; flex-wrap:wrap;}
+/* writing an update without leaving the alarm */
+.tray-note{flex:1 1 100%; margin-top:9px; padding-top:9px; border-top:1px dashed #2C3E50;}
+.tray-note textarea{width:100%; background:#0E1620; border:1px solid #2C3E50; color:#EEF1F5;
+  border-radius:3px; padding:8px 10px; font-family:inherit; font-size:13.5px;}
+.tray-note textarea::placeholder{color:#6E8298;}
+.tray-note textarea:focus{outline:2px solid #4E7FB0; outline-offset:1px;}
+.tray-note-foot{display:flex; align-items:center; gap:8px; margin-top:7px; flex-wrap:wrap;}
+.tray-note-foot .sel{background:#0E1620; border-color:#2C3E50; color:#EEF1F5;}
 .bell{background:transparent; border:1px solid #41505F; color:#D7E0E8; border-radius:2px;
   padding:6px 10px; font-family:'IBM Plex Mono',monospace; font-size:12px;}
 .bell.off{color:#7C8C9C;}
@@ -839,6 +848,9 @@ const CSS = `
 /* detail */
 .detail{margin-top:12px; padding:12px; background:#F7F9FB; border:1px solid var(--rule); border-radius:2px;}
 .dgrid{display:grid; grid-template-columns:repeat(auto-fit,minmax(170px,1fr)); gap:10px;}
+/* the issue gets the full width — it's prose, not a short field */
+.dgrid .span2{grid-column:1/-1;}
+.issue{white-space:pre-wrap; overflow-wrap:anywhere;}
 .lab{display:block; font-size:10.5px; letter-spacing:.12em; text-transform:uppercase;
   color:var(--muted); margin-bottom:4px; font-weight:600;}
 .hist{margin:12px 0 0; padding:0; list-style:none; border-top:1px solid var(--rule);}
@@ -1051,6 +1063,7 @@ function RepairBoard() {
   const [prefs, setPrefs] = useState({ sound: true, defaultMinutes: 30, name: "" });
   const [notice, setNotice] = useState(null); // transient banner
   const [page, setPage] = useState("board"); // 'board' | 'repaired'
+  const [trayNote, setTrayNote] = useState(null); // logging an update straight from the alarm
   const [, tick] = useState(0);
   const ref = useRef(data);
   ref.current = data;
@@ -1370,6 +1383,15 @@ function RepairBoard() {
     commit((p) => ({ ...p, repairs: p.repairs.map((r) => (r.id === id ? { ...r, seenAt: nowISO() } : r)) }));
   const markAllSeen = (ids) =>
     commit((p) => ({ ...p, repairs: p.repairs.map((r) => (ids.includes(r.id) ? { ...r, seenAt: nowISO() } : r)) }));
+
+  /* log an update straight off the alarm — the whole point of the alarm is
+     that someone was going to call the shop, so let them write down the
+     answer without hunting for the unit on the board */
+  const saveTrayNote = () => {
+    if (!trayNote || !trayNote.text.trim()) return;
+    logFollowUp(trayNote.id, trayNote.text.trim(), Number(trayNote.minutes) || 0);
+    setTrayNote(null);
+  };
 
   /* silences your own alarms only — never touches the shared record */
   const silenceAll = (list) => {
@@ -1878,11 +1900,49 @@ function RepairBoard() {
                   <button
                     className="btn sm"
                     style={{ background: "#fff", color: "var(--ink)", borderColor: "#fff" }}
-                    onClick={() => { setOpen(r.id); logFollowUp(r.id, "", 0); }}
+                    onClick={() =>
+                      setTrayNote(
+                        trayNote && trayNote.id === r.id
+                          ? null
+                          : { id: r.id, text: "", minutes: String(Number(r.lastMinutes) || prefs.defaultMinutes || 30) }
+                      )
+                    }
                   >
-                    Logged it
+                    {trayNote && trayNote.id === r.id ? "Cancel" : "Add update"}
                   </button>
                 </span>
+
+                {trayNote && trayNote.id === r.id && (
+                  <div className="tray-note">
+                    <GrowArea
+                      value={trayNote.text}
+                      minRows={2}
+                      autoFocus
+                      placeholder={"What did " + v.name + " say? Who did you speak with, and what's the ETA?"}
+                      onChange={(e) => setTrayNote({ ...trayNote, text: e.target.value })}
+                      onKeyDown={(e) => {
+                        if (e.key === "Enter" && (e.metaKey || e.ctrlKey)) saveTrayNote();
+                      }}
+                    />
+                    <div className="tray-note-foot">
+                      <span className="tiny">then check back in</span>
+                      <select
+                        className="sel"
+                        style={{ width: "auto", padding: "5px 8px" }}
+                        value={trayNote.minutes}
+                        onChange={(e) => setTrayNote({ ...trayNote, minutes: e.target.value })}
+                      >
+                        <option value="0">no reminder</option>
+                        {PRESETS.map((p) => <option key={p.m} value={p.m}>{p.label}</option>)}
+                      </select>
+                      <span className="spacer" />
+                      <button className="btn alt sm" onClick={() => setTrayNote(null)}>Cancel</button>
+                      <button className="btn sm" disabled={!trayNote.text.trim()} onClick={saveTrayNote}>
+                        Save update
+                      </button>
+                    </div>
+                  </div>
+                )}
               </div>
             );
           })}
@@ -2194,6 +2254,26 @@ const PAPERWORK = [
 ];
 const missingPaperwork = (r) => PAPERWORK.filter((p) => !p.has(r));
 const paperworkComplete = (r) => missingPaperwork(r).length === 0;
+
+/* A textarea that grows with what you type, so a long issue description is
+   readable in full instead of scrolling sideways through one line. */
+function GrowArea({ value, minRows = 3, className = "ta", innerRef, ...rest }) {
+  const ref = useRef(null);
+  /* innerRef lets a caller focus the box (the Log follow-up button does) */
+  const attach = (el) => {
+    ref.current = el;
+    if (innerRef) innerRef.current = el;
+  };
+  const fit = () => {
+    const el = ref.current;
+    if (!el) return;
+    el.style.height = "auto";
+    el.style.height = Math.max(el.scrollHeight, minRows * 21 + 16) + "px";
+  };
+  /* refit when the text changes from outside, and on first paint */
+  useEffect(fit, [value, minRows]);
+  return <textarea ref={attach} className={className + " grow"} value={value} onInput={fit} {...rest} />;
+}
 
 function Attachments({ r, me, onPatch }) {
   const [busy, setBusy] = useState(null); // { name, pct, stage } while uploading
@@ -2669,9 +2749,14 @@ function Row({ r, dup, acked, status, statuses, vendors, defaultMinutes, me, exp
                 />
               </div>
             )}
-            <div>
+            <div className="span2">
               <label className="lab">Issue</label>
-              <input className="inp" value={r.issue} onChange={(e) => onPatch({ issue: e.target.value })} />
+              <GrowArea
+                value={r.issue}
+                minRows={3}
+                placeholder="What's wrong, and is it out of service?"
+                onChange={(e) => onPatch({ issue: e.target.value })}
+              />
             </div>
             <div>
               <label className="lab">POC — point of contact</label>
@@ -2779,10 +2864,10 @@ function Row({ r, dup, acked, status, statuses, vendors, defaultMinutes, me, exp
 
           <div style={{ marginTop: 12 }}>
             <label className="lab">Add a follow-up note</label>
-            <textarea
-              className="ta"
-              ref={noteRef}
+            <GrowArea
+              innerRef={noteRef}
               value={note}
+              minRows={3}
               placeholder="Who you spoke with, what they promised, ETA…"
               onChange={(e) => setNote(e.target.value)}
             />
@@ -3108,7 +3193,12 @@ function AddRepair({ vendors, statuses, defaultMinutes, existingUnits, onAddVend
       </div>
       <div className="field">
         <label className="lab">Issue</label>
-        <textarea className="ta" value={issue} placeholder="What's wrong, and is it out of service?" onChange={(e) => setIssue(e.target.value)} />
+        <GrowArea
+          value={issue}
+          minRows={4}
+          placeholder="What's wrong, and is it out of service?"
+          onChange={(e) => setIssue(e.target.value)}
+        />
       </div>
       <div className="grid2">
         <div className="field">
