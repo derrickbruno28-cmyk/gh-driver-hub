@@ -220,16 +220,21 @@ const PRIORITIES = [
 const PRIO_LABEL = { 1: "Critical", 2: "High", 3: "Routine" };
 const prioOf = (r) => ([1, 2, 3].includes(Number(r.priority)) ? Number(r.priority) : 3);
 
-const OWNERSHIP = ["GH", "Leased", "Rented"];
-const OWN_LABEL = { GH: "GH", Leased: "Leased", Rented: "Rented" };
-const OWN_CLASS = { GH: "gh", Leased: "leased", Rented: "rented" };
+const OWNERSHIP = ["GH", "Leased", "Rented", "Partner"];
+const OWN_LABEL = { GH: "GH", Leased: "Leased", Rented: "Rented", Partner: "Partner" };
+const OWN_CLASS = { GH: "gh", Leased: "leased", Rented: "rented", Partner: "partner" };
+const OWN_OPTION = { GH: "GH-owned", Leased: "Leased", Rented: "Rented", Partner: "With a partner carrier" };
 /* trucks are all company-owned, so ownership is a trailer-only field */
 const tracksOwnership = (r) => r.unitType === "Trailer";
 const ownOf = (r) => (tracksOwnership(r) && OWNERSHIP.includes(r.ownership) ? r.ownership : "GH");
-const onHire = (r) => ownOf(r) !== "GH";
+/* on hire = we're paying a daily rate for it. A partner carrier isn't a
+   rental, so it doesn't carry billing days. */
+const onHire = (r) => ownOf(r) === "Leased" || ownOf(r) === "Rented";
 /* a trailer can be out with a partner carrier regardless of who owns it,
    so this is its own flag rather than a fourth ownership value */
-const onPartner = (r) => tracksOwnership(r) && !!r.partner;
+/* r.partner is the old standalone flag — still honoured so trailers
+   marked before "Partner" became an ownership option keep their label */
+const onPartner = (r) => tracksOwnership(r) && (ownOf(r) === "Partner" || !!r.partner);
 const partnerName = (r) => (r.partnerCarrier || "").trim();
 
 /* who's handling it */
@@ -1545,7 +1550,11 @@ function RepairBoard() {
               <div className="tray-row" key={r.id}>
                 <span className="u">{r.unitNumber}</span>
                 <ClaimChip r={r} me={prefs.name} readOnly />
-                {tracksOwnership(r) && <span className={"own " + OWN_CLASS[ownOf(r)]}>{OWN_LABEL[ownOf(r)]}</span>}
+                {tracksOwnership(r) && (
+                  <span className={"own " + (onPartner(r) ? "partner" : OWN_CLASS[ownOf(r)])}>
+                    {onPartner(r) ? "PARTNER" : OWN_LABEL[ownOf(r)]}
+                  </span>
+                )}
                 <span className="s">
                   {v.name} · {r.city === OTR ? r.location || "OTR" : r.city} · {statusOf(r.statusId).label}
                 </span>
@@ -2018,13 +2027,19 @@ function Row({ r, dup, status, statuses, vendors, defaultMinutes, me, expanded, 
         )}
         <ClaimChip r={r} me={me} team={team} onClaim={onClaim} onRelease={onRelease} onNeedName={onNeedName} onAddName={onAddName} />
         {tracksOwnership(r) && (
-          <span className={"own " + OWN_CLASS[ownOf(r)]} title={onHire(r) ? ownOf(r) + (r.lessor ? " from " + r.lessor : "") : "GH-owned trailer"}>
-            {OWN_LABEL[ownOf(r)]}
-          </span>
-        )}
-        {onPartner(r) && (
-          <span className="own partner" title={"Out with a partner carrier" + (partnerName(r) ? ": " + partnerName(r) : "")}>
-            PARTNER{partnerName(r) ? " · " + partnerName(r) : ""}
+          <span
+            className={"own " + (onPartner(r) ? "partner" : OWN_CLASS[ownOf(r)])}
+            title={
+              onPartner(r)
+                ? "Out with a partner carrier" + (partnerName(r) ? ": " + partnerName(r) : "")
+                : onHire(r)
+                ? ownOf(r) + (r.lessor ? " from " + r.lessor : "")
+                : "GH-owned trailer"
+            }
+          >
+            {onPartner(r)
+              ? "PARTNER" + (partnerName(r) ? " · " + partnerName(r) : "")
+              : OWN_LABEL[ownOf(r)]}
           </span>
         )}
         <span className={"kind " + r.unitType.toLowerCase()}>{r.unitType}</span>
@@ -2157,10 +2172,21 @@ function Row({ r, dup, status, statuses, vendors, defaultMinutes, me, expanded, 
             {tracksOwnership(r) && (
               <div>
                 <label className="lab">Trailer ownership</label>
-                <select className="sel" value={ownOf(r)} onChange={(e) => onPatch({ ownership: e.target.value })}>
-                  <option value="GH">GH-owned</option>
-                  <option value="Leased">Leased</option>
-                  <option value="Rented">Rented</option>
+                <select
+                  className="sel"
+                  value={ownOf(r)}
+                  onChange={(e) => {
+                    const o = e.target.value;
+                    /* the standalone partner flag is legacy — picking any
+                       ownership here is now the single source of truth */
+                    onPatch(
+                      o === "Partner"
+                        ? { ownership: o, partner: false, lessor: "" }
+                        : { ownership: o, partner: false, partnerCarrier: "" }
+                    );
+                  }}
+                >
+                  {OWNERSHIP.map((o) => <option key={o} value={o}>{OWN_OPTION[o]}</option>)}
                 </select>
               </div>
             )}
@@ -2175,26 +2201,15 @@ function Row({ r, dup, status, statuses, vendors, defaultMinutes, me, expanded, 
                 />
               </div>
             )}
-            {tracksOwnership(r) && (
+            {tracksOwnership(r) && onPartner(r) && (
               <div>
-                <label className="lab">Partner carrier</label>
-                <label className="meta" style={{ display: "flex", gap: 6, alignItems: "center", marginTop: 6 }}>
-                  <input
-                    type="checkbox"
-                    checked={!!r.partner}
-                    onChange={(e) => onPatch(e.target.checked ? { partner: true } : { partner: false, partnerCarrier: "" })}
-                  />
-                  <span>In use by a partner carrier</span>
-                </label>
-                {r.partner && (
-                  <input
-                    className="inp"
-                    style={{ marginTop: 7 }}
-                    value={r.partnerCarrier || ""}
-                    placeholder="Carrier name"
-                    onChange={(e) => onPatch({ partnerCarrier: e.target.value })}
-                  />
-                )}
+                <label className="lab">Partner carrier name</label>
+                <input
+                  className="inp"
+                  value={r.partnerCarrier || ""}
+                  placeholder="Rodriguez Freight"
+                  onChange={(e) => onPatch({ partnerCarrier: e.target.value })}
+                />
               </div>
             )}
             <div>
@@ -2431,7 +2446,6 @@ function AddRepair({ vendors, statuses, defaultMinutes, existingUnits, onAddVend
   const [unitNumber, setUnit] = useState("");
   const [ownership, setOwnership] = useState("GH");
   const [lessor, setLessor] = useState("");
-  const [partner, setPartner] = useState(false);
   const [partnerCarrier, setPartnerCarrier] = useState("");
   const [issue, setIssue] = useState("");
   const [priority, setPriority] = useState(3);
@@ -2481,9 +2495,8 @@ function AddRepair({ vendors, statuses, defaultMinutes, existingUnits, onAddVend
       unitType,
       unitNumber: unitNumber.trim().toUpperCase(),
       ownership: unitType === "Trailer" ? ownership : "GH",
-      lessor: unitType === "Trailer" && ownership !== "GH" ? lessor.trim() : "",
-      partner: unitType === "Trailer" ? partner : false,
-      partnerCarrier: unitType === "Trailer" && partner ? partnerCarrier.trim() : "",
+      lessor: unitType === "Trailer" && (ownership === "Leased" || ownership === "Rented") ? lessor.trim() : "",
+      partnerCarrier: unitType === "Trailer" && ownership === "Partner" ? partnerCarrier.trim() : "",
       issue: issue.trim(),
       poc: poc.trim(),
       priority,
@@ -2526,33 +2539,27 @@ function AddRepair({ vendors, statuses, defaultMinutes, existingUnits, onAddVend
           <div className="seg-ctl">
             {OWNERSHIP.map((o) => (
               <button key={o} aria-pressed={ownership === o} onClick={() => setOwnership(o)}>
-                {o === "GH" ? "GH-owned" : o}
+                {o === "Partner" ? "Partner carrier" : OWN_OPTION[o]}
               </button>
             ))}
           </div>
         </div>
       )}
-      {unitType === "Trailer" && ownership !== "GH" && (
+      {unitType === "Trailer" && (ownership === "Leased" || ownership === "Rented") && (
         <div className="field">
           <label className="lab">{ownership === "Rented" ? "Rental company" : "Lessor"}</label>
           <input className="inp" value={lessor} placeholder="XTRA Lease" onChange={(e) => setLessor(e.target.value)} />
         </div>
       )}
-      {unitType === "Trailer" && (
+      {unitType === "Trailer" && ownership === "Partner" && (
         <div className="field">
-          <label className="meta" style={{ display: "flex", gap: 6, alignItems: "center" }}>
-            <input type="checkbox" checked={partner} onChange={(e) => setPartner(e.target.checked)} />
-            <span>This trailer is in use by a partner carrier</span>
-          </label>
-          {partner && (
-            <input
-              className="inp"
-              style={{ marginTop: 8 }}
-              value={partnerCarrier}
-              placeholder="Partner carrier name"
-              onChange={(e) => setPartnerCarrier(e.target.value)}
-            />
-          )}
+          <label className="lab">Partner carrier name</label>
+          <input
+            className="inp"
+            value={partnerCarrier}
+            placeholder="Rodriguez Freight"
+            onChange={(e) => setPartnerCarrier(e.target.value)}
+          />
         </div>
       )}
       <div className="grid2">
