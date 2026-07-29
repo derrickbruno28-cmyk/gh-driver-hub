@@ -151,6 +151,87 @@ window.queueEmail = function(to, subject, html, text){
     queuedBy: currentUser ? currentUser.email : ''
   });
 };
+
+/* ---- reading a total off an invoice ----
+   Two paths, both entirely in the browser (no API keys, no billing):
+     * PDF   -> pdf.js pulls the real text layer. Near-perfect on an
+                invoice a shop emailed as a PDF.
+     * image -> tesseract.js OCRs it. Good on a flat, well-lit receipt,
+                shaky on a crumpled one shot at an angle.
+   Either way a person confirms the number before it counts — this saves
+   typing, it is never the last word. Libraries load on first use so
+   nobody pays the download unless they actually attach an invoice. */
+var _libs = {};
+function loadScript(url, globalName){
+  if (_libs[url]) return _libs[url];
+  _libs[url] = new Promise(function(res, rej){
+    var s = document.createElement('script');
+    s.src = url;
+    s.onload = function(){ res(window[globalName]); };
+    s.onerror = function(){ rej(new Error('could not load ' + url)); };
+    document.head.appendChild(s);
+  });
+  return _libs[url];
+}
+
+/* Pick the most total-like number in the text: prefer a figure sitting
+   next to a total-ish word, else the largest amount seen — on a receipt
+   that is nearly always the total. */
+function pickTotal(text){
+  if (!text) return 0;
+  var flat = String(text).replace(/\r/g, '').replace(/[ \t]+/g, ' ');
+  var money = '\\$?\\s*([0-9][0-9,]*\\.[0-9]{2})';
+  var best = 0;
+  [
+    new RegExp('(?:grand |invoice |amount )?total\\s*(?:due|amount)?\\s*:?\\s*' + money, 'ig'),
+    new RegExp('balance\\s*(?:due)?\\s*:?\\s*' + money, 'ig'),
+    new RegExp('amount\\s*due\\s*:?\\s*' + money, 'ig')
+  ].forEach(function(re){
+    var m;
+    while ((m = re.exec(flat)) !== null) {
+      var v = parseFloat(m[1].replace(/,/g, ''));
+      /* later matches win — "total" often precedes "grand total" */
+      if (isFinite(v) && v > 0) best = v;
+    }
+  });
+  if (best > 0) return best;
+  (flat.match(new RegExp(money, 'g')) || []).forEach(function(t){
+    var v = parseFloat(t.replace(/[^0-9.]/g, ''));
+    if (isFinite(v) && v > best) best = v;
+  });
+  return best;
+}
+
+window.readInvoiceTotal = async function(file, onStage){
+  try {
+    if (/pdf$/i.test(file.type) || /\.pdf$/i.test(file.name)) {
+      if (onStage) onStage('Reading the PDF…');
+      var pdfjs = await loadScript('https://unpkg.com/pdfjs-dist@3.11.174/build/pdf.min.js', 'pdfjsLib');
+      pdfjs.GlobalWorkerOptions.workerSrc = 'https://unpkg.com/pdfjs-dist@3.11.174/build/pdf.worker.min.js';
+      var doc = await pdfjs.getDocument({ data: await file.arrayBuffer() }).promise;
+      var text = '';
+      for (var i = 1; i <= Math.min(doc.numPages, 5); i++) {
+        var content = await (await doc.getPage(i)).getTextContent();
+        text += content.items.map(function(it){ return it.str; }).join(' ') + '\n';
+      }
+      return pickTotal(text);
+    }
+    if (!/^image\//i.test(file.type)) return 0;
+    if (onStage) onStage('Reading the receipt…');
+    var T = await loadScript('https://unpkg.com/tesseract.js@5.1.0/dist/tesseract.min.js', 'Tesseract');
+    var out = await T.recognize(file, 'eng', {
+      logger: function(m){
+        if (onStage && m.status === 'recognizing text') {
+          onStage('Reading the receipt… ' + Math.round((m.progress || 0) * 100) + '%');
+        }
+      }
+    });
+    return pickTotal(out && out.data && out.data.text);
+  } catch (e) {
+    console.warn('invoice read failed', e);
+    return 0;
+  }
+};
 </script>
 <script type="text/babel" data-presets="react">
 const { useState, useEffect, useMemo, useRef, useCallback } = React;
@@ -798,6 +879,7 @@ const CSS = `
 .list-row .addr{color:var(--blue); opacity:1; white-space:normal;}
 
 .chip.prio{font-weight:600;}
+.mine-tog[aria-pressed="true"]{background:#fff; color:var(--ink); border-color:#fff; font-weight:600;}
 .autosave{margin-top:10px; padding:7px 10px; border-radius:5px; background:rgba(44,115,85,.09);
   border:1px solid rgba(44,115,85,.25); color:var(--ink-2);}
 
@@ -839,6 +921,10 @@ const CSS = `
   padding-top:9px; border-top:1px dashed var(--rule);}
 .cap-act .meta{margin-right:auto;}
 b.over{color:var(--red);}
+.ask-amt{margin-top:8px; padding:9px 11px; border:1px solid var(--rule); border-left:3px solid var(--blue);
+  border-radius:3px; background:var(--steel-50);}
+.ask-row{display:flex; gap:8px; align-items:center; margin-top:7px;}
+.ask-row .inp{max-width:140px;}
 
 /* attachments */
 .attach{margin-top:12px; border-top:1px dashed var(--rule); padding-top:10px;}
@@ -958,6 +1044,11 @@ function RepairBoard() {
     });
   };
 
+  /* personal view — saved with your prefs, so it's per person and per
+     machine rather than something one person turns on for everybody */
+  const mine = !!prefs.mine && !!prefs.name;
+  const toggleMine = () => (prefs.name ? savePrefs({ mine: !prefs.mine }) : setModal("me"));
+
   /* load */
   useEffect(() => {
     (async () => {
@@ -1027,6 +1118,13 @@ function RepairBoard() {
   const statusOf = (id) => statuses.find((s) => s.id === id) || { label: "Unassigned", tone: "neutral" };
   const vendorOf = (id) => vendors.find((v) => v.id === id) || { name: "Pending shop — not decided yet", city: "" };
 
+  /* in the personal view every list and tally is about your units, not the
+     fleet's — declared here so the lists below can all lean on it */
+  const scoped = useMemo(
+    () => (mine ? repairs.filter((r) => isMine(r, prefs.name)) : repairs),
+    [repairs, mine, prefs.name]
+  );
+
   /* filtering */
   const visible = useMemo(() => {
     const needle = q.trim().toLowerCase();
@@ -1035,6 +1133,9 @@ function RepairBoard() {
       if (!needle && isParked(r)) return false;
       if (city !== "All" && r.city !== city) return false;
       if (kind !== "All" && r.unitType !== kind) return false;
+      /* personal view: only what this person has claimed. Kept separate from
+         the "whose" dropdown so it survives filter fiddling. */
+      if (mine && !isMine(r, prefs.name)) return false;
       if (own === "Partner" && !onPartner(r)) return false;
       if (own !== "All" && own !== "Partner" && (!tracksOwnership(r) || ownOf(r) !== own)) return false;
       if (whose === "Mine" && !isMine(r, prefs.name)) return false;
@@ -1046,7 +1147,7 @@ function RepairBoard() {
         .toLowerCase();
       return hay.includes(needle);
     });
-  }, [repairs, city, kind, own, whose, q, prefs.name, vendors, statuses, Math.floor(Date.now() / 30000)]);
+  }, [repairs, city, kind, own, whose, q, mine, prefs.name, vendors, statuses, Math.floor(Date.now() / 30000)]);
 
   const freshList = useMemo(
     () => visible.filter(isNew).sort((a, b) => new Date(b.reportedAt) - new Date(a.reportedAt)),
@@ -1055,13 +1156,13 @@ function RepairBoard() {
   const workedList = useMemo(() => visible.filter((r) => !isNew(r)), [visible]);
 
   const parkedList = useMemo(
-    () => repairs.filter(isParked).sort((a, b) => new Date(a.dueAt) - new Date(b.dueAt)),
-    [repairs, Math.floor(Date.now() / 1000)]
+    () => scoped.filter(isParked).sort((a, b) => new Date(a.dueAt) - new Date(b.dueAt)),
+    [scoped, Math.floor(Date.now() / 1000)]
   );
 
   const counts = useMemo(() => {
-    const c = { open: repairs.length, active: 0, mine: 0, free: 0, truck: 0, trailer: 0, stale: 0, overdue: 0, hire: 0, partner: 0, capFlag: 0 };
-    repairs.forEach((r) => {
+    const c = { open: scoped.length, active: 0, mine: 0, free: 0, truck: 0, trailer: 0, stale: 0, overdue: 0, hire: 0, partner: 0, capFlag: 0 };
+    scoped.forEach((r) => {
       if (r.unitType === "Trailer") c.trailer++;
       else c.truck++;
       if (onHire(r)) c.hire++;
@@ -1076,10 +1177,10 @@ function RepairBoard() {
       if (b === "amber") c.stale++;
       if (b === "red") c.overdue++;
     });
-    CITIES.forEach((ct) => (c[ct] = repairs.filter((r) => r.city === ct && !isParked(r)).length));
-    c[OTR] = repairs.filter((r) => r.city === OTR && !isParked(r)).length;
+    CITIES.forEach((ct) => (c[ct] = scoped.filter((r) => r.city === ct && !isParked(r)).length));
+    c[OTR] = scoped.filter((r) => r.city === OTR && !isParked(r)).length;
     return c;
-  }, [repairs, Math.floor(Date.now() / 30000)]);
+  }, [scoped, prefs.name, Math.floor(Date.now() / 30000)]);
 
   /* duplicate tracker — same unit number on the board more than once
      (parked units count too; someone may have re-reported a parked unit) */
@@ -1223,9 +1324,11 @@ function RepairBoard() {
       };
     });
 
+  /* the alarm tray follows the personal view too — in My units you're only
+     answering for your own, and that's the point of the view */
   const dueList = useMemo(
-    () => repairs.filter((r) => dueState(r) === "due").sort((a, b) => new Date(a.dueAt) - new Date(b.dueAt)),
-    [repairs, Math.floor(Date.now() / 1000)]
+    () => scoped.filter((r) => dueState(r) === "due").sort((a, b) => new Date(a.dueAt) - new Date(b.dueAt)),
+    [scoped, Math.floor(Date.now() / 1000)]
   );
   const ringing = dueList.filter((r) => !r.dueAck);
 
@@ -1319,7 +1422,11 @@ function RepairBoard() {
     );
   }
 
-  const shownCities = city === "All" ? LOCATIONS : [city];
+  /* the personal view drops cities you have nothing in — that's most of
+     the decluttering people are after */
+  const shownCities = (city === "All" ? LOCATIONS : [city]).filter(
+    (ct) => !mine || workedList.some((r) => r.city === ct)
+  );
   const hasDemo = repairs.some((r) => r.demo);
 
   return (
@@ -1341,7 +1448,7 @@ function RepairBoard() {
       <header className="mast">
         <div className="mast-top">
           <h1>
-            Repair <span>Board</span>
+            {mine ? <>{prefs.name}'s <span>Units</span></> : <>Repair <span>Board</span></>}
           </h1>
           <div className="live cond">
             <i className="dot" />
@@ -1354,6 +1461,18 @@ function RepairBoard() {
               title={prefs.sound ? "Alarm sound on — click to mute" : "Alarm sound muted — click to turn on"}
             >
               {prefs.sound ? "🔔 Alarm on" : "🔕 Muted"}
+            </button>
+            <button
+              className={"btn sm mine-tog" + (mine ? "" : " ghost")}
+              aria-pressed={mine}
+              onClick={toggleMine}
+              title={
+                mine
+                  ? "Showing only units you've claimed — click for the whole board"
+                  : "Show only the trucks and trailers you've claimed"
+              }
+            >
+              {mine ? "👤 My units" : "👤 My units"}
             </button>
             <button className="btn ghost sm" onClick={sync}>Sync</button>
             <button className="bell" onClick={() => setModal("me")} title="Your name is stamped on claims and follow-ups">
@@ -1916,8 +2035,9 @@ const FILE_KINDS = [
 ];
 
 function Attachments({ r, me, onPatch }) {
-  const [busy, setBusy] = useState(null); // { name, pct } while uploading
+  const [busy, setBusy] = useState(null); // { name, pct, stage } while uploading
   const [err, setErr] = useState("");
+  const [ask, setAsk] = useState(null); // confirming an invoice total
   const files = r.files || [];
   const invoices = files.filter((f) => f.kind === "invoice");
   const photos = files.filter((f) => f.kind === "photo");
@@ -1937,27 +2057,19 @@ function Attachments({ r, me, onPatch }) {
         setBusy({ name: f.name, pct: 0 });
         try {
           const up = await window.uploadRepairFile(f, (pct) => setBusy({ name: f.name, pct }));
-          /* an invoice on a partner carrier's trailer has to be checked
-             against the $150 cap, so capture the total as it's filed */
-          let amount = 0;
-          if (kind === "invoice" && onPartner(r)) {
-            const typed = window.prompt(
-              "Invoice total for " + f.name + "?\n\n" +
-                "Partner carrier repairs are pre-approved up to " + money(PARTNER_CAP) +
-                ". Anything above gets flagged for approval.\n\nNumbers only — leave blank to skip.",
-              ""
-            );
-            const n = Number(String(typed == null ? "" : typed).replace(/[^0-9.]/g, ""));
-            if (isFinite(n) && n > 0) amount = n;
-          }
+          const fid = uid("f");
           onPatch((cur) => ({
             files: [
               ...(cur.files || []),
-              { id: uid("f"), kind, name: up.name, size: up.size, mime: up.mime, url: up.url, path: up.path, at: nowISO(), by: me || "", amount },
+              { id: fid, kind, name: up.name, size: up.size, mime: up.mime, url: up.url, path: up.path, at: nowISO(), by: me || "", amount: 0 },
             ],
-            /* the highest invoice logged is what the cap is judged against */
-            ...(amount > 0 ? { partnerCost: Math.max(amount, Number(cur.partnerCost) || 0) } : {}),
           }));
+          /* an invoice needs a total so the $150 partner rule can judge it.
+             Try to read it off the file, then hand it over for confirming. */
+          if (kind === "invoice") {
+            const read = await window.readInvoiceTotal(f, (stage) => setBusy({ name: f.name, pct: 100, stage }));
+            setAsk({ fileId: fid, name: up.name, value: read > 0 ? String(read.toFixed(2)) : "", guessed: read > 0 });
+          }
         } catch (ex) {
           const code = ex && ex.code;
           setErr(
@@ -1978,6 +2090,17 @@ function Attachments({ r, me, onPatch }) {
     window.deleteRepairFile(f.path);
   };
 
+  const saveAmount = () => {
+    const n = Number(String(ask.value).replace(/[^0-9.]/g, ""));
+    const amount = isFinite(n) && n > 0 ? n : 0;
+    onPatch((cur) => ({
+      files: (cur.files || []).map((x) => (x.id === ask.fileId ? { ...x, amount } : x)),
+      /* the biggest invoice on the repair is what the cap is judged against */
+      ...(amount > 0 ? { partnerCost: Math.max(amount, Number(cur.partnerCost) || 0) } : {}),
+    }));
+    setAsk(null);
+  };
+
   return (
     <div className="attach">
       <div className="attach-hd">
@@ -1989,8 +2112,38 @@ function Attachments({ r, me, onPatch }) {
           </label>
         ))}
       </div>
-      {busy && <div className="meta">Uploading {busy.name}… {busy.pct}%</div>}
+      {busy && (
+        <div className="meta">
+          {busy.stage ? busy.stage + " (" + busy.name + ")" : "Uploading " + busy.name + "… " + busy.pct + "%"}
+        </div>
+      )}
       {err && <div className="err">{err}</div>}
+      {ask && (
+        <div className="ask-amt">
+          <span className="meta">
+            {ask.guessed ? (
+              <>Read <b>{money(Number(ask.value))}</b> off {ask.name} — correct it if that's wrong.</>
+            ) : (
+              <>Couldn't read a total off {ask.name}. Enter the invoice amount:</>
+            )}
+          </span>
+          <span className="ask-row">
+            <input
+              className="inp mono"
+              type="number"
+              min="0"
+              step="0.01"
+              autoFocus
+              value={ask.value}
+              placeholder="0.00"
+              onChange={(e) => setAsk({ ...ask, value: e.target.value })}
+              onKeyDown={(e) => e.key === "Enter" && saveAmount()}
+            />
+            <button className="btn sm" onClick={saveAmount}>Save total</button>
+            <button className="btn alt sm" onClick={() => setAsk(null)}>Skip</button>
+          </span>
+        </div>
+      )}
       {invoices.length > 0 && (
         <div className="attach-docs">
           {invoices.map((f) => (
