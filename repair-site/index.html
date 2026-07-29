@@ -926,6 +926,43 @@ b.over{color:var(--red);}
 .ask-row{display:flex; gap:8px; align-items:center; margin-top:7px;}
 .ask-row .inp{max-width:140px;}
 
+/* repaired records page */
+.page-hd{display:flex; align-items:center; gap:12px; flex-wrap:wrap; margin:18px 0 14px;}
+.page-hd h2{margin:0; font-family:'Barlow Condensed',sans-serif; text-transform:uppercase;
+  letter-spacing:.05em; font-size:22px; color:var(--ink);}
+.page-hd .search{max-width:230px;}
+.rp-list{display:flex; flex-direction:column; gap:10px;}
+.rp{background:var(--card); border:1px solid var(--rule); border-left:3px solid var(--green);
+  border-radius:3px; padding:11px 13px;}
+.rp.short{border-left-color:var(--red);}
+.rp-main{display:flex; align-items:center; gap:9px; flex-wrap:wrap;}
+.rp-unit{font-weight:700; font-size:15px;}
+.rp-where{font-size:12.5px; color:var(--muted);}
+.rp-issue{font-size:13px; color:var(--ink-2); flex:1 1 220px; min-width:0;}
+.rp-when{font-size:11.5px; color:var(--muted);}
+.rp-docs{display:flex; align-items:center; gap:10px; flex-wrap:wrap; margin-top:9px;
+  padding-top:9px; border-top:1px dashed var(--rule);}
+.pw{display:inline-flex; align-items:center; gap:6px; font-size:12.5px; color:var(--muted);}
+.pw.ok{color:var(--green);}
+.pw.miss{color:var(--red); font-weight:600;}
+.pw i{width:9px; height:9px; border-radius:50%; display:inline-block; flex:0 0 auto;}
+.dot-ok{background:var(--green);}
+.dot-miss{background:var(--red); box-shadow:0 0 0 0 rgba(178,58,46,.65); animation:pulse 1.15s infinite;}
+@keyframes pulse{
+  0%{box-shadow:0 0 0 0 rgba(178,58,46,.65);}
+  70%{box-shadow:0 0 0 7px rgba(178,58,46,0);}
+  100%{box-shadow:0 0 0 0 rgba(178,58,46,0);}
+}
+.pw-alert{font-size:11.5px; font-weight:700; color:#fff; background:var(--red);
+  padding:2px 8px; border-radius:9px; animation:blink 1.15s step-start infinite;}
+@keyframes blink{50%{opacity:.35;}}
+.count-pill.blink{animation:blink 1.15s step-start infinite;}
+.rp-open{margin-top:11px; padding-top:11px; border-top:1px solid var(--rule);}
+@media (prefers-reduced-motion:reduce){
+  .dot-miss,.pw-alert,.count-pill.blink{animation:none;}
+  .pw-alert{outline:2px solid var(--red);}
+}
+
 /* attachments */
 .attach{margin-top:12px; border-top:1px dashed var(--rule); padding-top:10px;}
 .attach-hd{display:flex; align-items:center; gap:8px; flex-wrap:wrap; margin-bottom:6px;}
@@ -997,6 +1034,7 @@ function RepairBoard() {
   const [modal, setModal] = useState(null); // 'add' | 'vendors' | 'statuses' | 'archive' | 'csv'
   const [prefs, setPrefs] = useState({ sound: true, defaultMinutes: 30, name: "" });
   const [notice, setNotice] = useState(null); // transient banner
+  const [page, setPage] = useState("board"); // 'board' | 'repaired'
   const [, tick] = useState(0);
   const ref = useRef(data);
   ref.current = data;
@@ -1194,6 +1232,9 @@ function RepairBoard() {
   }, [repairs]);
   const dupCount = useMemo(() => repairs.filter((r) => dupUnits.has(unitKey(r))).length, [repairs, dupUnits]);
 
+  /* closed-out repairs still waiting on paperwork */
+  const shortPaperwork = useMemo(() => archive.filter((r) => !paperworkComplete(r)).length, [archive]);
+
   /* mutations */
   const addRepair = (r) => commit((p) => ({ ...p, repairs: [...p.repairs, r] }));
   const patchRepair = (id, patch) =>
@@ -1306,6 +1347,13 @@ function RepairBoard() {
       return { ...p, archive: p.archive.filter((x) => x.id !== id), repairs: [...p.repairs, rest] };
     });
   const purge = (id) => commit((p) => ({ ...p, archive: p.archive.filter((x) => x.id !== id) }));
+  /* paperwork keeps arriving after a unit is closed out, so archived
+     records stay editable */
+  const patchArchive = (id, patch) =>
+    commit((p) => ({
+      ...p,
+      archive: p.archive.map((r) => (r.id === id ? { ...r, ...(typeof patch === "function" ? patch(r) : patch) } : r)),
+    }));
   /* delete outright — for duplicates and mis-entries that were never real
      repairs, so they don't pollute the Repaired history */
   const removeRepair = (id) => {
@@ -1429,6 +1477,42 @@ function RepairBoard() {
   );
   const hasDemo = repairs.some((r) => r.demo);
 
+  if (page === "repaired") {
+    return (
+      <div className="fb">
+        <style>{CSS}</style>
+        <header className="mast">
+          <div className="mast-top">
+            <h1>Repaired <span>Records</span></h1>
+            <div className="live cond">
+              <i className="dot" />
+              {saveState === "saving" ? "Saving" : saveState === "error" ? "Save failed" : saveState === "saved" ? "Saved" : "Live"}
+            </div>
+            <div className="mast-actions">
+              <button className="btn alt sm" onClick={() => setPage("board")}>← The board</button>
+            </div>
+          </div>
+          <div className="stats">
+            <div className="stat"><b>{archive.length}</b><s>Completed</s></div>
+            <div className={"stat" + (shortPaperwork ? " bad" : "")}><b>{shortPaperwork}</b><s>Missing paperwork</s></div>
+            <div className="stat"><b>{archive.length - shortPaperwork}</b><s>Fully documented</s></div>
+          </div>
+        </header>
+        <div className="wrap">
+          <RepairedPage
+            archive={archive}
+            vendors={vendors}
+            me={prefs.name}
+            onRestore={restore}
+            onPurge={purge}
+            onPatch={patchArchive}
+            onBack={() => setPage("board")}
+          />
+        </div>
+      </div>
+    );
+  }
+
   return (
     <div className={"fb" + (dueList.length ? " has-tray" : "")}>
       <style>{CSS}</style>
@@ -1480,8 +1564,9 @@ function RepairBoard() {
             </button>
             <button className="btn ghost sm" onClick={() => setModal("vendors")}>Shops</button>
             <button className="btn ghost sm" onClick={() => setModal("statuses")}>Statuses</button>
-            <button className="btn ghost sm" onClick={() => setModal("archive")}>
+            <button className="btn ghost sm" onClick={() => setPage("repaired")}>
               Repaired{archive.length ? " (" + archive.length + ")" : ""}
+              {shortPaperwork > 0 && <span className="count-pill blink">{shortPaperwork}</span>}
             </button>
             <button className="btn ghost sm" onClick={() => setModal("csv")}>Export</button>
             <button className="btn alt sm" onClick={() => setModal("add")}>+ Report a unit down</button>
@@ -1796,9 +1881,6 @@ function RepairBoard() {
           onClose={() => setModal(null)}
         />
       )}
-      {modal === "archive" && (
-        <Archive archive={archive} vendors={vendors} onRestore={restore} onPurge={purge} onClose={() => setModal(null)} />
-      )}
       {modal === "csv" && (
         <ExportCsv repairs={repairs} archive={archive} vendorOf={vendorOf} statusOf={statusOf} onClose={() => setModal(null)} />
       )}
@@ -2030,9 +2112,22 @@ function TimerButton({ label, state = "none", onSet, compact, canPark = true, re
 
 const FILE_KINDS = [
   { k: "invoice", label: "Invoice", accept: ".pdf,.doc,.docx,.xls,.xlsx,image/*", max: 25 },
+  { k: "receipt", label: "Receipt", accept: ".pdf,.doc,.docx,image/*", max: 25 },
   { k: "photo", label: "Photo", accept: "image/*", max: 25 },
   { k: "video", label: "Video", accept: "video/*", max: 200 },
 ];
+
+/* What a closed-out repair needs on file before the paperwork is done.
+   Media is either a photo or a video — one shot of the issue is enough. */
+const hasKind = (r, ...kinds) => (r.files || []).some((f) => kinds.includes(f.kind));
+const PAPERWORK = [
+  { id: "invoice", label: "Invoice", has: (r) => hasKind(r, "invoice") },
+  { id: "media", label: "Photo / video", has: (r) => hasKind(r, "photo", "video") },
+  { id: "receipt", label: "Receipt", has: (r) => hasKind(r, "receipt") },
+  { id: "approver", label: "Approved by", has: (r) => !!(r.approver && r.approver.trim()) },
+];
+const missingPaperwork = (r) => PAPERWORK.filter((p) => !p.has(r));
+const paperworkComplete = (r) => missingPaperwork(r).length === 0;
 
 function Attachments({ r, me, onPatch }) {
   const [busy, setBusy] = useState(null); // { name, pct, stage } while uploading
@@ -2104,7 +2199,7 @@ function Attachments({ r, me, onPatch }) {
   return (
     <div className="attach">
       <div className="attach-hd">
-        <label className="lab" style={{ margin: 0 }}>Files — invoices, photos, videos</label>
+        <label className="lab" style={{ margin: 0 }}>Files — invoice, receipt, photos, videos</label>
         {FILE_KINDS.map((fk) => (
           <label key={fk.k} className="btn alt sm attach-add">
             + {fk.label}
@@ -3346,36 +3441,145 @@ function Statuses({ statuses, repairs, onAdd, onRemove, onClose }) {
   );
 }
 
-function Archive({ archive, vendors, onRestore, onPurge, onClose }) {
-  const vname = (id) => (vendors.find((v) => v.id === id) || { name: "—" }).name;
+function RepairedPage({ archive, vendors, me, onRestore, onPurge, onPatch, onBack }) {
+  const [open, setOpen] = useState(null);
+  const [only, setOnly] = useState("all"); // all | missing
+  const [q, setQ] = useState("");
+  const vname = (id) => (vendors.find((v) => v.id === id) || { name: "Pending shop" }).name;
+
+  const rows = useMemo(() => {
+    const needle = q.trim().toLowerCase();
+    return archive.filter((r) => {
+      if (only === "missing" && paperworkComplete(r)) return false;
+      if (!needle) return true;
+      return [r.unitNumber, r.issue, vname(r.vendorId), r.approver, r.city]
+        .join(" ")
+        .toLowerCase()
+        .includes(needle);
+    });
+  }, [archive, only, q, vendors]);
+
+  const short = archive.filter((r) => !paperworkComplete(r)).length;
+
   return (
-    <Sheet title="Repaired and off the board" onClose={onClose} wide>
+    <div className="page">
+      <div className="page-hd">
+        <button className="btn ghost sm" onClick={onBack}>← Back to the board</button>
+        <h2>Repaired — paperwork</h2>
+        <span className="meta">
+          {archive.length} completed{short > 0 ? " · " + short + " missing paperwork" : " · all complete"}
+        </span>
+        <span className="spacer" />
+        <div className="seg-ctl">
+          <button aria-pressed={only === "all"} onClick={() => setOnly("all")}>All ({archive.length})</button>
+          <button aria-pressed={only === "missing"} onClick={() => setOnly("missing")}>
+            Missing ({short})
+          </button>
+        </div>
+        <input
+          className="inp search"
+          placeholder="Search unit, shop, issue…"
+          value={q}
+          onChange={(e) => setQ(e.target.value)}
+        />
+      </div>
+
       {archive.length === 0 ? (
-        <div className="meta">Nothing here yet. Units land here when you mark them repaired.</div>
+        <div className="empty">
+          <strong>Nothing repaired yet</strong>
+          Units land here when you mark them repaired on the board.
+        </div>
+      ) : rows.length === 0 ? (
+        <div className="empty">
+          <strong>{only === "missing" ? "Every repair has its paperwork" : "Nothing matches that search"}</strong>
+          {only === "missing" ? "Invoice, photo or video, receipt, and an approver are all on file." : "Try a different unit or shop."}
+        </div>
       ) : (
-        <div className="list">
-          {archive.map((r) => (
-            <div className="list-row" key={r.id}>
-              <div>
-                <div className="nm mono">{r.unitNumber} <span style={{ fontWeight: 400 }}>· {tracksOwnership(r) ? ownOf(r) + " " : ""}{r.unitType} · {r.city}{r.location ? " (" + r.location + ")" : ""}</span></div>
-                <div className="sub">
-                  {vname(r.vendorId)}{r.lessor ? " · " + r.lessor : ""}
-                  {onPartner(r) ? " · partner: " + (partnerName(r) || "yes") : ""} — {r.issue}
+        <div className="rp-list">
+          {rows.map((r) => {
+            const gaps = missingPaperwork(r);
+            const expanded = open === r.id;
+            return (
+              <div className={"rp" + (gaps.length ? " short" : "")} key={r.id}>
+                <div className="rp-main">
+                  <span className="rp-unit mono">{r.unitNumber}</span>
+                  {tracksOwnership(r) && (
+                    <span className={"own " + (onPartner(r) ? "partner" : OWN_CLASS[ownOf(r)])}>
+                      {onPartner(r) ? "PARTNER" : OWN_LABEL[ownOf(r)]}
+                    </span>
+                  )}
+                  <span className={"kind " + r.unitType.toLowerCase()}>{r.unitType}</span>
+                  <span className="rp-where">
+                    {vname(r.vendorId)} · {r.city === OTR ? r.location || "OTR" : r.city}
+                  </span>
+                  <span className="rp-issue">{r.issue}</span>
+                  <span className="spacer" />
+                  <span className="rp-when mono">repaired {stamp(r.repairedAt)}</span>
                 </div>
-                <div className="sub mono">
-                  reported {stampDate(r.reportedAt)} · repaired {stamp(r.repairedAt)}
-                  {r.closeNote ? " · " + r.closeNote : ""}
+
+                <div className="rp-docs">
+                  {PAPERWORK.map((doc) => {
+                    const ok = doc.has(r);
+                    return (
+                      <span key={doc.id} className={"pw " + (ok ? "ok" : "miss")} title={ok ? doc.label + " on file" : doc.label + " still needed"}>
+                        <i className={ok ? "dot-ok" : "dot-miss"} />
+                        {doc.label}
+                        {doc.id === "approver" && ok ? ": " + r.approver : ""}
+                      </span>
+                    );
+                  })}
+                  {gaps.length > 0 && (
+                    <span className="pw-alert">⚠ {gaps.length} missing</span>
+                  )}
+                  <span className="spacer" />
+                  <button className="btn alt sm" onClick={() => setOpen(expanded ? null : r.id)}>
+                    {expanded ? "Close" : gaps.length ? "Upload what's missing" : "View files"}
+                  </button>
+                  <button className="btn alt sm" onClick={() => onRestore(r.id)}>Put back</button>
+                  <button
+                    className="btn danger sm"
+                    onClick={() => window.confirm("Delete " + r.unitNumber + " and its files from the repaired list?") && onPurge(r.id)}
+                  >
+                    Delete
+                  </button>
                 </div>
+
+                {expanded && (
+                  <div className="rp-open">
+                    <div className="dgrid">
+                      <div>
+                        <label className="lab">Approved by</label>
+                        <input
+                          className="inp"
+                          value={r.approver || ""}
+                          placeholder="Who signed off on this repair"
+                          onChange={(e) => onPatch(r.id, { approver: e.target.value })}
+                        />
+                      </div>
+                      <div>
+                        <label className="lab">Closing note</label>
+                        <input
+                          className="inp"
+                          value={r.closeNote || ""}
+                          placeholder="What finally fixed it"
+                          onChange={(e) => onPatch(r.id, { closeNote: e.target.value })}
+                        />
+                      </div>
+                    </div>
+                    <Attachments r={r} me={me} onPatch={(patch) => onPatch(r.id, patch)} />
+                    <div className="sub mono" style={{ marginTop: 10 }}>
+                      reported {stampDate(r.reportedAt)} · down{" "}
+                      {Math.max(0, Math.round(hoursSince(r.reportedAt) - hoursSince(r.repairedAt)))}h
+                      {r.claimedBy ? " · handled by " + r.claimedBy : ""}
+                    </div>
+                  </div>
+                )}
               </div>
-              <div style={{ marginLeft: "auto", display: "flex", gap: 8 }}>
-                <button className="btn alt sm" onClick={() => onRestore(r.id)}>Put back</button>
-                <button className="btn danger sm" onClick={() => onPurge(r.id)}>Delete</button>
-              </div>
-            </div>
-          ))}
+            );
+          })}
         </div>
       )}
-    </Sheet>
+    </div>
   );
 }
 
