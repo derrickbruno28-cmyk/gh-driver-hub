@@ -195,9 +195,11 @@ const TONE_LABEL = {
   alert: "Needs attention",
 };
 
-/* Who gets an email when a plan of action is submitted.
-   Edit this list to change the group — nothing else needs to change. */
-const PLAN_NOTIFY = [
+/* The notification group. The plan-of-action workflow that used to trigger
+   these was removed, so nothing currently sends mail — the plumbing
+   (window.queueEmail + EMAIL-SETUP.md) is kept so a new trigger can be
+   wired up without rebuilding it. */
+const NOTIFY_GROUP = [
   "Alfred@ghlogisticsllc.com",
   "Caleb@ghlogisticsllc.com",
   "Derrick@ghlogisticsllc.com",
@@ -208,100 +210,6 @@ const BOARD_URL = "https://fleet-repair-ctdashboard.firebaseapp.com/";
 
 const esc = (s) =>
   String(s == null ? "" : s).replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
-
-/* the three things worth emailing the group about */
-const MAIL_KINDS = {
-  submitted: {
-    subject: "Plan of action submitted",
-    lead: "A plan of action was submitted and needs review.",
-    byLabel: "Submitted by",
-    accent: "#1B4F87",
-    cta: "Review it on the board",
-  },
-  approved: {
-    subject: "Plan of action APPROVED",
-    lead: "A plan of action was approved — the shop is clear to proceed.",
-    byLabel: "Approved by",
-    accent: "#2C7355",
-    cta: "Open it on the board",
-  },
-  changes: {
-    subject: "Plan of action — CHANGES REQUESTED",
-    lead: "Changes were requested on a plan of action. It needs another pass.",
-    byLabel: "Sent back by",
-    accent: "#D08A0C",
-    cta: "Open it on the board",
-  },
-};
-
-const planEmailSubject = (kind, r, shop) =>
-  MAIL_KINDS[kind].subject + " — " + (r.unitNumber || "unit") + " at " + (shop || "pending shop");
-
-/* the plain-text body, reused for both the queued email and the
-   mailto fallback */
-const planEmailText = (kind, r, shop, plan, who, note) => {
-  const k = MAIL_KINDS[kind];
-  return [
-    k.lead,
-    "",
-    "Unit:      " + (r.unitNumber || "") + " (" + (r.unitType || "") + ")",
-    "Shop:      " + (shop || "Pending — not decided yet"),
-    "Location:  " + (r.city === OTR ? r.location || "OTR" : r.city || ""),
-    "Priority:  " + prioOf(r) + " — " + PRIO_LABEL[prioOf(r)],
-    "Issue:     " + (r.issue || ""),
-    "Down:      " + elapsed(r.reportedAt),
-    r.poc ? "POC:       " + r.poc : "",
-    "",
-    k.byLabel + ": " + (who || "someone on the board"),
-    note ? "" : null,
-    note ? (kind === "changes" ? "WHAT NEEDS TO CHANGE" : "NOTE") : null,
-    note || null,
-    "",
-    "PLAN OF ACTION",
-    plan || "",
-    "",
-    k.cta + ": " + BOARD_URL,
-  ]
-    .filter((l) => l !== "" && l !== null)
-    .join("\n");
-};
-
-const planEmailHtml = (kind, r, shop, plan, who, note) => {
-  const k = MAIL_KINDS[kind];
-  return (
-    '<div style="font-family:system-ui,-apple-system,Segoe UI,Roboto,sans-serif;font-size:14px;color:#131C26;line-height:1.5">' +
-    '<p style="margin:0 0 14px"><strong style="color:' + k.accent + '">' + esc(k.lead) + "</strong></p>" +
-    '<table cellpadding="4" style="border-collapse:collapse;font-size:14px;margin-bottom:14px">' +
-    ["Unit", esc(r.unitNumber) + " (" + esc(r.unitType) + ")",
-     "Shop", esc(shop || "Pending — not decided yet"),
-     "Location", esc(r.city === OTR ? r.location || "OTR" : r.city),
-     "Priority", esc(prioOf(r) + " — " + PRIO_LABEL[prioOf(r)]),
-     "Issue", esc(r.issue),
-     "Down", esc(elapsed(r.reportedAt)),
-     k.byLabel, esc(who || "someone on the board")]
-      .reduce((rows, cell, i, all) => (i % 2 ? rows : rows.concat(
-        '<tr><td style="color:#6C7C8C;padding-right:12px;vertical-align:top">' + cell +
-        '</td><td><strong>' + all[i + 1] + "</strong></td></tr>")), [])
-      .join("") +
-    "</table>" +
-    (note
-      ? '<p style="margin:0 0 6px;color:#6C7C8C;font-size:12.5px;text-transform:uppercase;letter-spacing:.05em">' +
-        (kind === "changes" ? "What needs to change" : "Note") + "</p>" +
-        '<div style="border-left:3px solid ' + k.accent + ';padding:2px 0 2px 12px;margin:0 0 16px;white-space:pre-wrap">' +
-        esc(note) + "</div>"
-      : "") +
-    '<p style="margin:0 0 6px;color:#6C7C8C;font-size:12.5px;text-transform:uppercase;letter-spacing:.05em">Plan of action</p>' +
-    '<div style="border-left:3px solid #D4DBE3;padding:2px 0 2px 12px;margin:0 0 16px;white-space:pre-wrap">' +
-    esc(plan) + "</div>" +
-    '<p style="margin:0"><a href="' + BOARD_URL + '" style="background:' + k.accent + ';color:#fff;text-decoration:none;' +
-    'padding:9px 16px;border-radius:5px;display:inline-block">' + esc(k.cta) + "</a></p></div>"
-  );
-};
-
-const planMailto = (kind, r, shop, plan, who, note) =>
-  "mailto:" + PLAN_NOTIFY.join(",") +
-  "?subject=" + encodeURIComponent(planEmailSubject(kind, r, shop)) +
-  "&body=" + encodeURIComponent(planEmailText(kind, r, shop, plan, who, note));
 
 /* priority */
 const PRIORITIES = [
@@ -336,7 +244,7 @@ const initials = (n) =>
     .join("") || "?";
 
 /* A repair stays NEW until a person has demonstrably dealt with it: logged a
-   follow-up, written a plan, claimed it, parked it to a date, or marked it
+   follow-up, claimed it, parked it to a date, or marked it
    reviewed. Time alone doesn't clear it — an untouched repair from this morning
    is exactly the one that gets lost.
    Note: a plain reminder does NOT clear it, because intake sets one by default,
@@ -345,22 +253,8 @@ const initials = (n) =>
 const isNew = (r) =>
   !r.seenAt &&
   !(r.followUps && r.followUps.length) &&
-  !(r.plan && r.plan.trim()) &&
   !(r.claimedBy && r.claimedBy.trim()) &&
   !r.parked;
-
-/* plan of action + approval */
-const hasPlan = (r) => !!(r.plan && r.plan.trim());
-const planState = (r) => {
-  if (!hasPlan(r)) return "none";
-  return ["submitted", "approved", "changes"].includes(r.planState) ? r.planState : "submitted";
-};
-const PLAN_LABEL = {
-  none: "Needs a plan",
-  submitted: "Awaiting approval",
-  approved: "Plan approved",
-  changes: "Changes requested",
-};
 
 /* reminders */
 const PRESETS = [
@@ -483,12 +377,7 @@ const DEMO = () => {
         ownership: "Rented",
         lessor: "XTRA Lease",
         issue: "Landing gear crank sheared, ABS light",
-        plan: "Shop to replace the crank assembly and clear the ABS fault. Est. $640, back in service tomorrow AM. Rental clock stops on pickup.",
-        planBy: "You",
-        planAt: t(3),
-        planState: "submitted",
-        planLog: [{ at: t(3), by: "You", action: "plan", note: "" }],
-        statusId: "s-actionplan",
+        statusId: "s-quote",
         reportedAt: t(30),
         dueAt: new Date(Date.now() - 4 * 60000).toISOString(),
         followUps: [],
@@ -694,44 +583,6 @@ const CSS = `
 .where-lab{font-size:11.5px; color:var(--muted);}
 .where-lab b{color:var(--ink-2); font-weight:500;}
 
-/* plan of action */
-.pl{font-family:'Barlow Condensed',sans-serif; text-transform:uppercase; letter-spacing:.07em;
-  font-size:11px; font-weight:600; padding:2px 8px; border-radius:2px; white-space:nowrap;}
-.pl.none{background:#FBF0DA; color:#8A5B08; border:1px solid #E8D3A4;}
-.pl.submitted{background:#E3EDF8; color:var(--blue); border:1px solid #C3D8EE;}
-.pl.approved{background:#E8F0EC; color:var(--green); border:1px solid #B9D3C6;}
-.pl.changes{background:#F8E5E2; color:var(--red); border:1px solid #E0B4AE;}
-
-.plan{margin-top:12px; background:#fff; border:1px solid var(--rule); border-left:3px solid var(--blue);
-  border-radius:2px; padding:12px 13px;}
-.plan.is-approved{border-left-color:var(--green);}
-.plan.is-changes{border-left-color:var(--red);}
-.plan.is-none{border-left-color:var(--amber);}
-.plan-hd{display:flex; align-items:center; gap:9px; margin-bottom:9px; flex-wrap:wrap;}
-.plan-hd h6{margin:0; font-family:'Barlow Condensed',sans-serif; text-transform:uppercase;
-  letter-spacing:.07em; font-size:15px; font-weight:700;}
-.plan-hd .who{font-size:11.5px; color:var(--muted); margin-left:auto;}
-.verdict{padding:9px 11px; border-radius:2px; font-size:12.5px; margin-bottom:10px; line-height:1.4;}
-.verdict.ok{background:#E8F0EC; border:1px solid #B9D3C6; color:#1F5A41;}
-.verdict.no{background:#F8E5E2; border:1px solid #E0B4AE; color:#8E2A20;}
-.verdict b{font-family:'IBM Plex Mono',monospace; font-weight:600;}
-.plan-acts{display:flex; gap:7px; align-items:center; margin-top:9px; flex-wrap:wrap;}
-.btn.go{background:var(--green); border-color:var(--green);}
-.btn.no{background:#fff; color:var(--red); border-color:var(--red);}
-.plog{list-style:none; margin:11px 0 0; padding:9px 0 0; border-top:1px solid var(--steel-100);}
-.plog li{font-size:12.5px; color:var(--ink-2); padding:3px 0;}
-.plog time{font-family:'IBM Plex Mono',monospace; font-size:11px; color:var(--muted); margin-right:7px;}
-.plan-read{background:var(--steel-50); border:1px solid var(--rule); border-radius:2px; padding:10px 11px;
-  font-size:13.5px; line-height:1.5; white-space:pre-wrap;}
-
-/* approval queue */
-.q-bar{display:flex; align-items:center; gap:10px; background:var(--steel-50); border:1px solid var(--rule);
-  border-radius:2px; padding:9px 12px; margin-bottom:16px; font-size:12.5px; flex-wrap:wrap;}
-.q-item{border:1px solid var(--rule); border-radius:2px; margin-bottom:14px;}
-.q-hd{display:flex; align-items:center; gap:9px; padding:10px 12px; background:#F7F9FB;
-  border-bottom:1px solid var(--rule); flex-wrap:wrap;}
-.q-bd{padding:12px;}
-.q-none{color:var(--muted); font-size:13px; padding:8px 0;}
 .count-pill{display:inline-flex; align-items:center; justify-content:center; min-width:17px; height:17px;
   padding:0 5px; border-radius:9px; background:var(--red); color:#fff; font-family:'IBM Plex Mono',monospace;
   font-size:10.5px; font-weight:600; margin-left:6px;}
@@ -923,7 +774,7 @@ const CSS = `
 .autosave{margin-top:10px; padding:7px 10px; border-radius:5px; background:rgba(44,115,85,.09);
   border:1px solid rgba(44,115,85,.25); color:var(--ink-2);}
 
-/* transient banner (plan email queued, etc.) */
+/* transient banner */
 .notice-pop{position:fixed; top:14px; left:50%; transform:translateX(-50%); z-index:900;
   display:flex; align-items:center; gap:12px; max-width:min(620px,94vw);
   background:var(--card); border:1px solid var(--rule); border-left:4px solid var(--green);
@@ -1012,7 +863,7 @@ function RepairBoard() {
   const [shut, setShut] = useState({});
   const [modal, setModal] = useState(null); // 'add' | 'vendors' | 'statuses' | 'archive' | 'csv'
   const [prefs, setPrefs] = useState({ sound: true, defaultMinutes: 30, name: "" });
-  const [notice, setNotice] = useState(null); // transient banner, e.g. plan email queued
+  const [notice, setNotice] = useState(null); // transient banner
   const [, tick] = useState(0);
   const ref = useRef(data);
   ref.current = data;
@@ -1283,87 +1134,6 @@ function RepairBoard() {
   const markAllSeen = (ids) =>
     commit((p) => ({ ...p, repairs: p.repairs.map((r) => (ids.includes(r.id) ? { ...r, seenAt: nowISO() } : r)) }));
 
-  /* --- plan of action --- */
-  const logPlan = (r, action, by, note) => ({
-    ...r,
-    planLog: [...(r.planLog || []), { at: nowISO(), by: by || "someone", action, note: note || "" }].slice(-30),
-  });
-  /* keep the group in the loop on every plan decision. Reads the repair
-     after the commit, so the mail always reflects what was just saved. */
-  const notifyPlan = (kind, id, note) => {
-    const r = ref.current.repairs.find((x) => x.id === id);
-    if (!r) return;
-    const shop = vendorOf(r.vendorId).name;
-    const who = prefs.name || "someone on the board";
-    const plan = r.plan || "";
-    const back = planMailto(kind, r, shop, plan, who, note);
-    const what = kind === "approved" ? "Plan approved" : kind === "changes" ? "Changes requested" : "Plan submitted";
-    window
-      .queueEmail(
-        PLAN_NOTIFY,
-        planEmailSubject(kind, r, shop),
-        planEmailHtml(kind, r, shop, plan, who, note),
-        planEmailText(kind, r, shop, plan, who, note)
-      )
-      .then(() =>
-        setNotice({ kind: "ok", msg: what + " — notification queued for " + PLAN_NOTIFY.length + " people.", href: back })
-      )
-      .catch(() =>
-        setNotice({ kind: "bad", msg: what + " saved, but the email could not be queued.", href: back })
-      );
-  };
-
-  const savePlan = (id, text) => {
-    commit((p) => ({
-      ...p,
-      repairs: p.repairs.map((r) => {
-        if (r.id !== id) return r;
-        const revised = planState(r) === "approved" && (r.plan || "") !== text;
-        const base = {
-          ...r,
-          plan: text,
-          planBy: prefs.name,
-          planAt: nowISO(),
-          planState: "submitted",
-          approvedBy: revised ? "" : r.approvedBy,
-          approvedAt: revised ? "" : r.approvedAt,
-          planNote: "",
-        };
-        return logPlan(base, revised ? "revised" : "plan", prefs.name);
-      }),
-    }));
-    notifyPlan("submitted", id);
-  };
-  const approvePlan = (id, note) => {
-    commit((p) => ({
-      ...p,
-      repairs: p.repairs.map((r) =>
-        r.id === id
-          ? logPlan(
-              { ...r, planState: "approved", approvedBy: prefs.name, approvedAt: nowISO(), planNote: note || "" },
-              "approved",
-              prefs.name,
-              note
-            )
-          : r
-      ),
-    }));
-    notifyPlan("approved", id, note);
-  };
-  const requestChanges = (id, note) => {
-    commit((p) => ({
-      ...p,
-      repairs: p.repairs.map((r) =>
-        r.id === id
-          ? logPlan({ ...r, planState: "changes", planNote: note || "", approvedBy: "", approvedAt: "" }, "changes", prefs.name, note)
-          : r
-      ),
-    }));
-    notifyPlan("changes", id, note);
-  };
-
-  const needsApproval = useMemo(() => repairs.filter((r) => planState(r) === "submitted"), [repairs]);
-  const needsPlan = useMemo(() => repairs.filter((r) => planState(r) === "none"), [repairs]);
   const silence = (id) =>
     commit((p) => ({ ...p, repairs: p.repairs.map((r) => (r.id === id ? { ...r, dueAck: true } : r)) }));
   const silenceAll = () =>
@@ -1467,9 +1237,6 @@ function RepairBoard() {
     expanded: open === r.id,
     onToggle: () => setOpen(open === r.id ? null : r.id),
     onPatch: (patch) => patchRepair(r.id, patch),
-    onSavePlan: (t) => savePlan(r.id, t),
-    onApprove: (n) => approvePlan(r.id, n),
-    onChanges: (n) => requestChanges(r.id, n),
     onNeedName: () => setModal("me"),
     onFollowUp: (n, next) => logFollowUp(r.id, n, next),
     onEditFollowUp: (i, n) => editFollowUp(r.id, i, n),
@@ -1540,11 +1307,7 @@ function RepairBoard() {
               {prefs.sound ? "🔔 Alarm on" : "🔕 Muted"}
             </button>
             <button className="btn ghost sm" onClick={sync}>Sync</button>
-            <button className="btn alt sm" onClick={() => setModal("approve")}>
-              Plans of action
-              {needsApproval.length > 0 && <span className="count-pill">{needsApproval.length}</span>}
-            </button>
-            <button className="bell" onClick={() => setModal("me")} title="Your name is stamped on plans and approvals">
+            <button className="bell" onClick={() => setModal("me")} title="Your name is stamped on claims and follow-ups">
               {prefs.name ? "👤 " + prefs.name : "👤 Set your name"}
             </button>
             <button className="btn ghost sm" onClick={() => setModal("vendors")}>Shops</button>
@@ -1560,7 +1323,6 @@ function RepairBoard() {
           <div className={"stat" + (dueList.length ? " bad" : "")}><b>{dueList.length}</b><s>Follow up now</s></div>
           <div className={"stat" + (freshList.length ? " warn" : "")}><b>{freshList.length}</b><s>New</s></div>
           <div className="stat"><b>{counts.mine} / {counts.free}</b><s>Yours / unclaimed</s></div>
-          <div className={"stat" + (needsApproval.length ? " warn" : "")}><b>{needsApproval.length}</b><s>Plans to approve</s></div>
           <div className="stat"><b>{counts.active}</b><s>On the board</s></div>
           <div className="stat"><b>{parkedList.length}</b><s>Parked</s></div>
           <div className="stat"><b>{counts.truck} / {counts.trailer}</b><s>Trucks / trailers</s></div>
@@ -1812,21 +1574,6 @@ function RepairBoard() {
           onClose={() => setModal(null)}
         />
       )}
-      {modal === "approve" && (
-        <Approvals
-          needsApproval={needsApproval}
-          needsPlan={needsPlan}
-          me={prefs.name}
-          vendorOf={vendorOf}
-          statusOf={statusOf}
-          onSave={savePlan}
-          onApprove={approvePlan}
-          onChanges={requestChanges}
-          onNeedName={() => setModal("me")}
-          onOpenUnit={(id) => { setOpen(id); setModal(null); }}
-          onClose={() => setModal(null)}
-        />
-      )}
       {modal === "me" && (
         <WhoAmI
           name={prefs.name}
@@ -1984,129 +1731,6 @@ function ClaimChip({ r, me, team = [], onClaim, onRelease, onNeedName, onAddName
       </button>
       {menu && assignMenu}
     </span>
-  );
-}
-
-/* --------------------------- plan of action ------------------------ */
-
-function PlanBlock({ r, me, onSave, onApprove, onChanges, onNeedName, readOnlyPlan }) {
-  const ps = planState(r);
-  const fresh = isNew(r);
-  const [text, setText] = useState(r.plan || "");
-  const [note, setNote] = useState("");
-  const [asking, setAsking] = useState(false);
-  const dirty = text.trim() !== (r.plan || "").trim();
-
-  useEffect(() => {
-    setText(r.plan || "");
-  }, [r.plan]);
-
-  const gate = (fn) => () => {
-    if (!me) return onNeedName();
-    fn();
-  };
-
-  return (
-    <div className={"plan is-" + ps}>
-      <div className="plan-hd">
-        <h6>Plan of action</h6>
-        <span className={"pl " + ps}>{PLAN_LABEL[ps]}</span>
-        {r.planAt && (
-          <span className="who">
-            written by {r.planBy || "unknown"} · {stamp(r.planAt)}
-          </span>
-        )}
-      </div>
-
-      {ps === "approved" && (
-        <div className="verdict ok">
-          Approved by <b>{r.approvedBy || "unknown"}</b> on <b>{stamp(r.approvedAt)}</b>
-          {r.planNote ? " — " + r.planNote : ""}
-        </div>
-      )}
-      {ps === "changes" && (
-        <div className="verdict no">
-          Changes requested{r.planNote ? ": " + r.planNote : "."} Update the plan below and it goes back for approval.
-        </div>
-      )}
-
-      {readOnlyPlan ? (
-        <div className="plan-read">{r.plan || "No plan written yet."}</div>
-      ) : (
-        <>
-          <textarea
-            className="ta"
-            style={{ minHeight: 84 }}
-            value={text}
-            placeholder="What's the fix, who's doing it, what does it cost, and when is it back in service?"
-            onChange={(e) => setText(e.target.value)}
-          />
-          <div className="plan-acts">
-            <button
-              className="btn sm"
-              disabled={!dirty || !text.trim()}
-              title={!text.trim() ? "Write the plan above first" : !dirty ? "Already saved — edit the text to resubmit" : "Save this plan"}
-              onClick={gate(() => onSave(text.trim()))}
-            >
-              {ps === "none" ? "Submit plan" : "Save and resubmit"}
-            </button>
-            {dirty && <span className="meta">unsaved edits</span>}
-          </div>
-        </>
-      )}
-
-      {!asking ? (
-        <div className="plan-acts">
-          {hasPlan(r) && ps !== "approved" && (
-            <>
-              <button className="btn go sm" disabled={dirty} onClick={gate(() => onApprove(""))}>
-                Approve plan
-              </button>
-              <button className="btn no sm" disabled={dirty} onClick={() => setAsking(true)}>
-                Request changes
-              </button>
-              {dirty && <span className="meta">save your edits before approving</span>}
-            </>
-          )}
-          {hasPlan(r) && ps === "approved" && (
-            <button className="btn no sm" onClick={() => setAsking(true)}>Withdraw approval</button>
-          )}
-        </div>
-      ) : (
-        <div style={{ marginTop: 9 }}>
-          <label className="lab">What needs to change?</label>
-          <textarea className="ta" style={{ minHeight: 56 }} value={note} onChange={(e) => setNote(e.target.value)} />
-          <div className="plan-acts">
-            <button className="btn alt sm" onClick={() => { setAsking(false); setNote(""); }}>Cancel</button>
-            <button
-              className="btn no sm"
-              onClick={gate(() => { onChanges(note.trim()); setAsking(false); setNote(""); })}
-            >
-              Send back
-            </button>
-          </div>
-        </div>
-      )}
-
-      {r.planLog && r.planLog.length > 0 && (
-        <ul className="plog">
-          {[...r.planLog].reverse().slice(0, 6).map((l, i) => (
-            <li key={i}>
-              <time className="mono">{stamp(l.at)}</time>
-              <b>{l.by}</b>{" "}
-              {l.action === "approved"
-                ? "approved the plan"
-                : l.action === "changes"
-                ? "requested changes"
-                : l.action === "revised"
-                ? "revised the approved plan"
-                : "wrote the plan"}
-              {l.note ? " — " + l.note : ""}
-            </li>
-          ))}
-        </ul>
-      )}
-    </div>
   );
 }
 
@@ -2322,7 +1946,7 @@ function Attachments({ r, me, onPatch }) {
   );
 }
 
-function Row({ r, dup, status, statuses, vendors, defaultMinutes, me, expanded, showWhere, onSeen, onToggle, onPatch, onFollowUp, onEditFollowUp, onDeleteFollowUp, onTimer, onSilence, onClose, onRemove, onSavePlan, onApprove, onChanges, onNeedName, onClaim, onRelease, onUnpark, team, onAddName }) {
+function Row({ r, dup, status, statuses, vendors, defaultMinutes, me, expanded, showWhere, onSeen, onToggle, onPatch, onFollowUp, onEditFollowUp, onDeleteFollowUp, onTimer, onSilence, onClose, onRemove, onNeedName, onClaim, onRelease, onUnpark, team, onAddName }) {
   const [note, setNote] = useState("");
   const [nextMin, setNextMin] = useState(String(defaultMinutes || 30));
   const [closing, setClosing] = useState(false);
@@ -2345,7 +1969,6 @@ function Row({ r, dup, status, statuses, vendors, defaultMinutes, me, expanded, 
   const band = touchBand(r);
   const ds = dueState(r);
   const parked = isParked(r);
-  const ps = planState(r);
   const fresh = isNew(r);
   const segs = 8; // 12h per segment, 96h+ full
   const filled = Math.min(segs, Math.max(1, Math.ceil(down / 12)));
@@ -2403,9 +2026,6 @@ function Row({ r, dup, status, statuses, vendors, defaultMinutes, me, expanded, 
             📎 {(r.files || []).length}
           </span>
         )}
-        <span className={"pl " + ps} title={PLAN_LABEL[ps]}>
-          {ps === "approved" ? "✓ plan approved" : ps === "submitted" ? "plan awaiting approval" : ps === "changes" ? "plan sent back" : "no plan yet"}
-        </span>
         <span className={"chip " + status.tone}>{status.label}</span>
       </div>
       <div className="r2">
@@ -2460,14 +2080,6 @@ function Row({ r, dup, status, statuses, vendors, defaultMinutes, me, expanded, 
 
       {expanded && (
         <div className="detail">
-          <PlanBlock
-            r={r}
-            me={me}
-            onSave={onSavePlan}
-            onApprove={onApprove}
-            onChanges={onChanges}
-            onNeedName={onNeedName}
-          />
           <div className="dgrid" style={{ marginTop: 12 }}>
             <div>
               <label className="lab">Unit type</label>
@@ -3097,7 +2709,7 @@ function WhoAmI({ name, team = [], repairs = [], onSave, onAdd, onRemove, onClos
           <button className="btn" disabled={!n.trim()} onClick={() => onSave(n.trim())}>Save</button>
         </div>
         <div className="meta" style={{ marginTop: 7 }}>
-          Stamped on claims, plans, and approvals so the trail shows who did what. Saved on this device — Roger
+          Stamped on claims and follow-ups so the trail shows who did what. Saved on this device — Roger
           sets his own on his.
         </div>
         {team.length > 0 && (
@@ -3158,92 +2770,6 @@ function WhoAmI({ name, team = [], repairs = [], onSave, onAdd, onRemove, onClos
       <div className="foot" style={{ marginTop: 14 }}>
         <button className="btn alt" onClick={onClose}>Done</button>
       </div>
-    </Sheet>
-  );
-}
-
-function Approvals({ needsApproval, needsPlan, me, vendorOf, statusOf, onSave, onApprove, onChanges, onNeedName, onOpenUnit, onClose }) {
-  const header = (r) => {
-    const v = vendorOf(r.vendorId);
-    return (
-      <div className="q-hd">
-        <span className="unit">{r.unitNumber}</span>
-        <ClaimChip r={r} me={me} readOnly />
-        {tracksOwnership(r) && <span className={"own " + OWN_CLASS[ownOf(r)]}>{OWN_LABEL[ownOf(r)]}</span>}
-        <span className={"kind " + r.unitType.toLowerCase()}>{r.unitType}</span>
-        <span className="meta">
-          {v.name} · {r.city === OTR ? r.location || "OTR" : r.city} · down {elapsed(r.reportedAt)}
-        </span>
-        <span className={"chip " + statusOf(r.statusId).tone}>{statusOf(r.statusId).label}</span>
-        <button className="btn alt sm" style={{ marginLeft: "auto" }} onClick={() => onOpenUnit(r.id)}>
-          Open on board
-        </button>
-      </div>
-    );
-  };
-
-  return (
-    <Sheet title="Plans of action" onClose={onClose} wide>
-      <div className="q-bar">
-        <span>
-          {me ? (
-            <>
-              Signed in as <b>{me}</b> — approvals will carry your name.
-            </>
-          ) : (
-            <>Set your name before approving, so the trail shows who signed off.</>
-          )}
-        </span>
-        {!me && (
-          <button className="btn sm" style={{ marginLeft: "auto" }} onClick={onNeedName}>Set your name</button>
-        )}
-      </div>
-
-      <label className="lab">Waiting on approval ({needsApproval.length})</label>
-      {needsApproval.length === 0 ? (
-        <div className="q-none">Nothing waiting. Every plan on the board is either approved or not written yet.</div>
-      ) : (
-        needsApproval.map((r) => (
-          <div className="q-item" key={r.id}>
-            {header(r)}
-            <div className="q-bd">
-              <label className="lab">The issue</label>
-              <div className="plan-read" style={{ marginBottom: 4 }}>{r.issue}</div>
-              <PlanBlock
-                r={r}
-                me={me}
-                onSave={(t) => onSave(r.id, t)}
-                onApprove={(n) => onApprove(r.id, n)}
-                onChanges={(n) => onChanges(r.id, n)}
-                onNeedName={onNeedName}
-              />
-            </div>
-          </div>
-        ))
-      )}
-
-      <label className="lab" style={{ marginTop: 22 }}>No plan written yet ({needsPlan.length})</label>
-      {needsPlan.length === 0 ? (
-        <div className="q-none">Every unit down has a plan on it.</div>
-      ) : (
-        needsPlan.map((r) => (
-          <div className="q-item" key={r.id}>
-            {header(r)}
-            <div className="q-bd">
-              <label className="lab">The issue</label>
-              <div className="plan-read" style={{ marginBottom: 4 }}>{r.issue}</div>
-              <PlanBlock
-                r={r}
-                me={me}
-                onSave={(t) => onSave(r.id, t)}
-                onApprove={(n) => onApprove(r.id, n)}
-                onChanges={(n) => onChanges(r.id, n)}
-                onNeedName={onNeedName}
-              />
-            </div>
-          </div>
-        ))
-      )}
     </Sheet>
   );
 }
@@ -3512,7 +3038,7 @@ function Archive({ archive, vendors, onRestore, onPurge, onClose }) {
 function ExportCsv({ repairs, archive, vendorOf, statusOf, onClose }) {
   const [copied, setCopied] = useState(false);
   const csv = useMemo(() => {
-    const head = ["Location", "Breakdown location", "Shop", "Shop address", "POC", "Priority", "Unit type", "Unit number", "Ownership", "Lessor / rental co", "Partner carrier", "Issue", "Status", "Approved by", "Requested by", "Driver who reported", "Safe to drive", "Loaded trailer", "Delivery", "Reported", "Last follow-up", "Follow-ups", "Claimed by", "Reminder due", "Parked", "Plan status", "Plan of action", "Plan approved by", "Files", "Hours down", "Repaired"];
+    const head = ["Location", "Breakdown location", "Shop", "Shop address", "POC", "Priority", "Unit type", "Unit number", "Ownership", "Lessor / rental co", "Partner carrier", "Issue", "Status", "Approved by", "Requested by", "Driver who reported", "Safe to drive", "Loaded trailer", "Delivery", "Reported", "Last follow-up", "Follow-ups", "Claimed by", "Reminder due", "Parked", "Files", "Hours down", "Repaired"];
     const esc = (v) => '"' + String(v == null ? "" : v).replace(/"/g, '""') + '"';
     const line = (r, done) =>
       [
@@ -3541,9 +3067,6 @@ function ExportCsv({ repairs, archive, vendorOf, statusOf, onClose }) {
         claimedBy(r),
         r.dueAt ? stamp(r.dueAt) : "",
         isParked(r) ? "Parked" : "",
-        PLAN_LABEL[planState(r)],
-        r.plan || "",
-        r.approvedBy ? r.approvedBy + " " + stamp(r.approvedAt) : "",
         (r.files || []).map((f) => f.name).join("; "),
         done ? Math.round(hoursSince(r.reportedAt) - hoursSince(r.repairedAt)) : Math.round(hoursSince(r.reportedAt)),
         done ? stamp(r.repairedAt) : "",

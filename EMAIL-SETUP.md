@@ -1,22 +1,21 @@
 # Turning on plan-of-action emails
 
-The Repair CT Dashboard already does its half of the job: **on every plan-of-action
-decision, the board writes an email into a Firestore collection called `mail`.**
-You can see them piling up in the Firebase console under Firestore → `mail`.
+> ⚠️ **No email trigger is currently wired up.** These emails used to fire on
+> plan-of-action submit / approve / changes, and that workflow was removed from
+> the board. The sending plumbing below is still in place (`window.queueEmail`
+> and the `NOTIFY_GROUP` recipient list in `repair-site/index.html`) so a new
+> trigger — a status change, a new unit going down, a critical-priority repair —
+> can be hooked up in a few lines. Say what should send mail and it gets wired in.
 
-Three events send mail, all to the same group:
-
-| Event | Subject line | Includes |
-|---|---|---|
-| Plan **submitted** | `Plan of action submitted — …` | the plan, unit details, who submitted |
-| Plan **approved** | `Plan of action APPROVED — …` | the plan, who approved, any note |
-| **Changes requested** | `Plan of action — CHANGES REQUESTED — …` | what needs to change, plus the plan |
+The mechanism: the board writes a document into a Firestore collection called
+`mail`, and the extension below picks it up and sends it. You can watch them
+arrive in the Firebase console under Firestore → `mail`.
 
 Nothing actually *sends* those yet. A web page can't send email on its own —
 something server-side has to pick the message up and hand it to a mail server.
 Below is the one-time setup that does it.
 
-**Recipients** are hard-coded in `repair-site/index.html`, in the `PLAN_NOTIFY`
+**Recipients** are hard-coded in `repair-site/index.html`, in the `NOTIFY_GROUP`
 list near the top. Currently:
 
 - Alfred@ghlogisticsllc.com
