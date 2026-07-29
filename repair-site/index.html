@@ -1327,8 +1327,10 @@ function RepairBoard() {
 
   const silence = (id) =>
     commit((p) => ({ ...p, repairs: p.repairs.map((r) => (r.id === id ? { ...r, dueAck: true } : r)) }));
-  const silenceAll = () =>
-    commit((p) => ({ ...p, repairs: p.repairs.map((r) => (dueState(r) === "due" ? { ...r, dueAck: true } : r)) }));
+  /* only quiets what's actually in your tray — silencing shouldn't reach
+     across to a teammate's units */
+  const silenceAll = (ids) =>
+    commit((p) => ({ ...p, repairs: p.repairs.map((r) => (ids.includes(r.id) ? { ...r, dueAck: true } : r)) }));
   const closeRepair = (id, note) =>
     commit((p) => {
       const r = p.repairs.find((x) => x.id === id);
@@ -1372,11 +1374,18 @@ function RepairBoard() {
       };
     });
 
-  /* the alarm tray follows the personal view too — in My units you're only
-     answering for your own, and that's the point of the view */
+  /* Whose alarm is it? Only the person holding the unit gets nagged, so
+     snoozing your own reminder doesn't wipe it off a teammate's screen.
+     Unclaimed units still ring for everyone — nobody owns them, so
+     nobody would hear them otherwise. Before you've set a name we can't
+     tell who you are, so you see the lot. */
+  const alarmsForMe = (r) => !prefs.name || isMine(r, prefs.name) || !claimedBy(r);
   const dueList = useMemo(
-    () => scoped.filter((r) => dueState(r) === "due").sort((a, b) => new Date(a.dueAt) - new Date(b.dueAt)),
-    [scoped, Math.floor(Date.now() / 1000)]
+    () =>
+      scoped
+        .filter((r) => dueState(r) === "due" && alarmsForMe(r))
+        .sort((a, b) => new Date(a.dueAt) - new Date(b.dueAt)),
+    [scoped, prefs.name, Math.floor(Date.now() / 1000)]
   );
   const ringing = dueList.filter((r) => !r.dueAck);
 
@@ -1778,9 +1787,15 @@ function RepairBoard() {
           <div className="tray-hd">
             <h5>Follow up now</h5>
             <span className="n">{dueList.length} waiting{ringing.length ? " · alarm active" : " · silenced"}</span>
-            <span className="tiny" style={{ marginLeft: 8 }}>Alarms only sound while this board is open.</span>
+            <span className="tiny" style={{ marginLeft: 8 }}>
+              {prefs.name
+                ? "Your units and anything unclaimed. Alarms only sound while this board is open."
+                : "Set your name to see only your own alarms. Alarms only sound while this board is open."}
+            </span>
             <div style={{ marginLeft: "auto", display: "flex", gap: 6 }}>
-              {ringing.length > 0 && <button className="bell" onClick={silenceAll}>Silence all</button>}
+              {ringing.length > 0 && (
+                <button className="bell" onClick={() => silenceAll(ringing.map((r) => r.id))}>Silence all</button>
+              )}
               <button
                 className={"bell" + (prefs.sound ? "" : " off")}
                 onClick={() => { armAudio(); savePrefs({ sound: !prefs.sound }); }}
