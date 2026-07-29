@@ -335,6 +335,22 @@ const partnerCleared = (r) => !!(r.partnerApprovedBy && String(r.partnerApproved
 const partnerFlagged = (r) => partnerOver(r) && !partnerCleared(r);
 const money = (n) => "$" + Number(n).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 });
 
+/* CSV helpers — Excel and Sheets both want the BOM to read UTF-8 right */
+const csvCell = (v) => '"' + String(v == null ? "" : v).replace(/"/g, '""') + '"';
+const csvRows = (rows) => rows.map((r) => r.map(csvCell).join(",")).join("\r\n");
+const downloadCsv = (filename, text) => {
+  const blob = new Blob(["﻿" + text], { type: "text/csv;charset=utf-8" });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  a.href = url;
+  a.download = filename;
+  document.body.appendChild(a);
+  a.click();
+  a.remove();
+  setTimeout(() => URL.revokeObjectURL(url), 1000);
+};
+const fileStamp = () => new Date().toISOString().slice(0, 10);
+
 /* who's handling it */
 const claimedBy = (r) => (r.claimedBy || "").trim();
 const isMine = (r, me) => !!me && claimedBy(r).toLowerCase() === me.trim().toLowerCase();
@@ -1087,6 +1103,36 @@ function RepairBoard() {
   const mine = !!prefs.mine && !!prefs.name;
   const toggleMine = () => (prefs.name ? savePrefs({ mine: !prefs.mine }) : setModal("me"));
 
+  /* Snoozing and silencing are yours alone — they live in your prefs, not
+     on the shared record, so pushing a unit off your screen leaves it on
+     everyone else's. Each entry remembers which reminder it answered
+     (forDueAt); the moment someone reschedules the unit, your snooze
+     stops applying and it can alarm again. */
+  const alarmPrefs = prefs.alarms || {};
+  const setAlarmPref = (id, patch, dueAt) => {
+    const next = { ...alarmPrefs, [id]: { ...(alarmPrefs[id] || {}), ...patch, forDueAt: dueAt || "" } };
+    /* keep the map from growing forever */
+    const cutoff = Date.now() - 7 * 864e5;
+    Object.keys(next).forEach((k) => {
+      const t = new Date(next[k].forDueAt || 0).getTime();
+      if (isFinite(t) && t && t < cutoff) delete next[k];
+    });
+    savePrefs({ alarms: next });
+  };
+  /* a personal entry only counts while it still matches the unit's current
+     reminder time */
+  const myAlarm = (r) => {
+    const a = alarmPrefs[r.id];
+    return a && a.forDueAt === r.dueAt ? a : null;
+  };
+  const snoozedByMe = (r) => {
+    const a = myAlarm(r);
+    return !!(a && a.until && new Date(a.until).getTime() > Date.now());
+  };
+  const ackedByMe = (r) => !!(myAlarm(r) || {}).ack;
+  const mySnooze = (id, minutes, dueAt) => setAlarmPref(id, { until: inMinutes(minutes), ack: true }, dueAt);
+  const mySilence = (id, dueAt) => setAlarmPref(id, { ack: true }, dueAt);
+
   /* load */
   useEffect(() => {
     (async () => {
@@ -1325,12 +1371,14 @@ function RepairBoard() {
   const markAllSeen = (ids) =>
     commit((p) => ({ ...p, repairs: p.repairs.map((r) => (ids.includes(r.id) ? { ...r, seenAt: nowISO() } : r)) }));
 
-  const silence = (id) =>
-    commit((p) => ({ ...p, repairs: p.repairs.map((r) => (r.id === id ? { ...r, dueAck: true } : r)) }));
-  /* only quiets what's actually in your tray — silencing shouldn't reach
-     across to a teammate's units */
-  const silenceAll = (ids) =>
-    commit((p) => ({ ...p, repairs: p.repairs.map((r) => (ids.includes(r.id) ? { ...r, dueAck: true } : r)) }));
+  /* silences your own alarms only — never touches the shared record */
+  const silenceAll = (list) => {
+    const next = { ...(prefs.alarms || {}) };
+    list.forEach((r) => {
+      next[r.id] = { ...(next[r.id] || {}), ack: true, forDueAt: r.dueAt || "" };
+    });
+    savePrefs({ alarms: next });
+  };
   const closeRepair = (id, note) =>
     commit((p) => {
       const r = p.repairs.find((x) => x.id === id);
@@ -1383,11 +1431,11 @@ function RepairBoard() {
   const dueList = useMemo(
     () =>
       scoped
-        .filter((r) => dueState(r) === "due" && alarmsForMe(r))
+        .filter((r) => dueState(r) === "due" && alarmsForMe(r) && !snoozedByMe(r))
         .sort((a, b) => new Date(a.dueAt) - new Date(b.dueAt)),
-    [scoped, prefs.name, Math.floor(Date.now() / 1000)]
+    [scoped, prefs.name, prefs.alarms, Math.floor(Date.now() / 1000)]
   );
-  const ringing = dueList.filter((r) => !r.dueAck);
+  const ringing = dueList.filter((r) => !ackedByMe(r));
 
   const claimants = useMemo(() => {
     const all = [...(data.team || []), ...repairs.map(claimedBy)].filter(Boolean);
@@ -1451,7 +1499,8 @@ function RepairBoard() {
     onEditFollowUp: (i, n) => editFollowUp(r.id, i, n),
     onDeleteFollowUp: (i) => deleteFollowUp(r.id, i),
     onTimer: (m) => setTimer(r.id, m),
-    onSilence: () => silence(r.id),
+    onSilence: () => mySilence(r.id, r.dueAt),
+    acked: ackedByMe(r),
     onClaim: (who) => claim(r.id, who),
     onRelease: () => release(r.id),
     team: claimants,
@@ -1794,7 +1843,7 @@ function RepairBoard() {
             </span>
             <div style={{ marginLeft: "auto", display: "flex", gap: 6 }}>
               {ringing.length > 0 && (
-                <button className="bell" onClick={() => silenceAll(ringing.map((r) => r.id))}>Silence all</button>
+                <button className="bell" onClick={() => silenceAll(ringing)}>Silence all</button>
               )}
               <button
                 className={"bell" + (prefs.sound ? "" : " off")}
@@ -1821,9 +1870,11 @@ function RepairBoard() {
                 {v.phone && <span className="s mono">{v.phone}</span>}
                 <span className="ov">{countdown(r.dueAt)}</span>
                 <span className="ta">
-                  <button className="btn alt sm" onClick={() => setTimer(r.id, 15)}>Snooze 15</button>
-                  <button className="btn alt sm" onClick={() => setTimer(r.id, 30)}>Snooze 30</button>
-                  {!r.dueAck && <button className="bell" onClick={() => silence(r.id)}>Silence</button>}
+                  <button className="btn alt sm" title="Off your screen only" onClick={() => mySnooze(r.id, 15, r.dueAt)}>Snooze 15</button>
+                  <button className="btn alt sm" title="Off your screen only" onClick={() => mySnooze(r.id, 30, r.dueAt)}>Snooze 30</button>
+                  {!ackedByMe(r) && (
+                    <button className="bell" title="Stops your alarm only" onClick={() => mySilence(r.id, r.dueAt)}>Silence</button>
+                  )}
                   <button
                     className="btn sm"
                     style={{ background: "#fff", color: "var(--ink)", borderColor: "#fff" }}
@@ -2291,7 +2342,7 @@ function Attachments({ r, me, onPatch }) {
   );
 }
 
-function Row({ r, dup, status, statuses, vendors, defaultMinutes, me, expanded, showWhere, onSeen, onToggle, onPatch, onFollowUp, onEditFollowUp, onDeleteFollowUp, onTimer, onSilence, onClose, onRemove, onNeedName, onClaim, onRelease, onUnpark, team, onAddName }) {
+function Row({ r, dup, acked, status, statuses, vendors, defaultMinutes, me, expanded, showWhere, onSeen, onToggle, onPatch, onFollowUp, onEditFollowUp, onDeleteFollowUp, onTimer, onSilence, onClose, onRemove, onNeedName, onClaim, onRelease, onUnpark, team, onAddName }) {
   const [note, setNote] = useState("");
   const [nextMin, setNextMin] = useState(String(defaultMinutes || 30));
   const [closing, setClosing] = useState(false);
@@ -2442,8 +2493,8 @@ function Row({ r, dup, status, statuses, vendors, defaultMinutes, me, expanded, 
               ↻ Reset
             </button>
           )}
-          {ds === "due" && !r.dueAck && (
-            <button className="btn alt sm" onClick={onSilence}>Silence</button>
+          {ds === "due" && !acked && (
+            <button className="btn alt sm" title="Stops your alarm only" onClick={onSilence}>Silence</button>
           )}
           <button className="btn alt sm" onClick={openNotes} title="Open the notes for this unit">Log follow-up</button>
           {onUnpark && parked && (
@@ -3476,6 +3527,56 @@ function RepairedPage({ archive, vendors, me, onRestore, onPurge, onPatch, onBac
 
   const short = archive.filter((r) => !paperworkComplete(r)).length;
 
+  /* one row per completed repair, built for a spreadsheet — the paperwork
+     columns are YES/NO so they pivot and filter cleanly */
+  const exportRows = (list) => {
+    const head = [
+      "Unit", "Unit type", "Ownership", "Partner carrier", "Shop", "City", "Breakdown location",
+      "Issue", "Closing note", "Priority", "Reported", "Repaired", "Hours down",
+      "Handled by", "Approved by", "POC", "Requested by", "Driver who reported",
+      "Invoice on file", "Receipt on file", "Photo/video on file", "Paperwork complete",
+      "Invoice total", "Over $150 cap", "Overage approved by", "Follow-ups", "Files",
+    ];
+    const body = list.map((r) => [
+      r.unitNumber,
+      r.unitType,
+      tracksOwnership(r) ? ownOf(r) : "",
+      onPartner(r) ? partnerName(r) || "YES" : "",
+      vname(r.vendorId),
+      r.city,
+      r.location || "",
+      r.issue,
+      r.closeNote || "",
+      prioOf(r) + " — " + PRIO_LABEL[prioOf(r)],
+      stampDate(r.reportedAt),
+      stamp(r.repairedAt),
+      Math.max(0, Math.round(hoursSince(r.reportedAt) - hoursSince(r.repairedAt))),
+      r.claimedBy || "",
+      r.approver || "",
+      r.poc || "",
+      r.requestedBy || "",
+      r.driver || "",
+      hasKind(r, "invoice") ? "YES" : "NO",
+      hasKind(r, "receipt") ? "YES" : "NO",
+      hasKind(r, "photo", "video") ? "YES" : "NO",
+      paperworkComplete(r) ? "YES" : "NO",
+      invoiceTotal(r) > 0 ? invoiceTotal(r).toFixed(2) : "",
+      onPartner(r) ? (partnerOver(r) ? "YES" : "NO") : "",
+      r.partnerApprovedBy || "",
+      (r.followUps || []).length,
+      (r.files || []).map((f) => f.kind + ": " + f.name).join("; "),
+    ]);
+    return csvRows([head, ...body]);
+  };
+
+  const exportNow = () => {
+    const list = rows.length ? rows : archive;
+    downloadCsv(
+      "repairs-completed-" + (only === "missing" ? "missing-paperwork-" : "") + fileStamp() + ".csv",
+      exportRows(list)
+    );
+  };
+
   return (
     <div className="page">
       <div className="page-hd">
@@ -3497,6 +3598,14 @@ function RepairedPage({ archive, vendors, me, onRestore, onPurge, onPatch, onBac
           value={q}
           onChange={(e) => setQ(e.target.value)}
         />
+        <button
+          className="btn sm"
+          disabled={archive.length === 0}
+          title="Download these repairs as a CSV you can open in Excel or Google Sheets"
+          onClick={exportNow}
+        >
+          ⭳ Export CSV{rows.length !== archive.length ? " (" + rows.length + ")" : ""}
+        </button>
       </div>
 
       {archive.length === 0 ? (
@@ -3657,7 +3766,10 @@ function ExportCsv({ repairs, archive, vendorOf, statusOf, onClose }) {
       </div>
       <textarea className="ta mono" style={{ minHeight: 240, fontSize: 12 }} readOnly value={csv} onFocus={(e) => e.target.select()} />
       <div className="foot">
-        <button className="btn" onClick={copy}>{copied ? "Copied" : "Copy CSV"}</button>
+        <button className="btn alt" onClick={copy}>{copied ? "Copied" : "Copy CSV"}</button>
+        <button className="btn" onClick={() => downloadCsv("repair-board-" + fileStamp() + ".csv", csv)}>
+          ⭳ Download CSV
+        </button>
       </div>
     </Sheet>
   );
