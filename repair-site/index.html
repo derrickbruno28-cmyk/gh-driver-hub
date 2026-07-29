@@ -237,6 +237,23 @@ const onHire = (r) => ownOf(r) === "Leased" || ownOf(r) === "Rented";
 const onPartner = (r) => tracksOwnership(r) && (ownOf(r) === "Partner" || !!r.partner);
 const partnerName = (r) => (r.partnerCarrier || "").trim();
 
+/* Partner-carrier spend rule (Alfred): a repair we perform on a partner
+   carrier's trailer is pre-approved only up to $150. Anything above that
+   — declared up front, or discovered when the invoice is logged — gets
+   flagged until someone approves the overage. */
+const PARTNER_CAP = 150;
+const invoiceTotal = (r) => {
+  const n = Number(r.partnerCost);
+  return isFinite(n) && n > 0 ? n : 0;
+};
+/* over the cap either because nobody could confirm it was under, or
+   because a logged invoice came in above it */
+const partnerOver = (r) =>
+  onPartner(r) && (invoiceTotal(r) > PARTNER_CAP || r.partnerCapOk === false);
+const partnerCleared = (r) => !!(r.partnerApprovedBy && String(r.partnerApprovedBy).trim());
+const partnerFlagged = (r) => partnerOver(r) && !partnerCleared(r);
+const money = (n) => "$" + Number(n).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+
 /* who's handling it */
 const claimedBy = (r) => (r.claimedBy || "").trim();
 const isMine = (r, me) => !!me && claimedBy(r).toLowerCase() === me.trim().toLowerCase();
@@ -803,6 +820,26 @@ const CSS = `
 .hist-edit .ta{min-height:56px;}
 .hist-edit .hist-acts{display:flex; justify-content:flex-end; margin:6px 0 0;}
 
+/* partner carrier spend cap */
+.cap{margin-top:12px; background:#fff; border:1px solid var(--rule); border-left:3px solid var(--rule);
+  border-radius:3px; padding:11px 13px;}
+.cap.is-ok{border-left-color:var(--green);}
+.cap.is-cleared{border-left-color:var(--green);}
+.cap.is-unset{border-left-color:var(--amber);}
+.cap.is-flagged{border-left-color:var(--red); background:#FDF4F3;}
+.cap-hd{display:flex; align-items:center; gap:10px; margin-bottom:8px; flex-wrap:wrap;}
+.cap-hd h6{margin:0; font-family:'Barlow Condensed',sans-serif; text-transform:uppercase;
+  letter-spacing:.06em; font-size:14px; color:var(--ink);}
+.cap-state{font-size:12px; font-weight:600; color:var(--ink-2); margin-left:auto;}
+.cap.is-flagged .cap-state{color:var(--red);}
+.cap.is-ok .cap-state,.cap.is-cleared .cap-state{color:var(--green);}
+.cap-check{display:flex; gap:7px; align-items:flex-start;}
+.cap-check input{margin-top:3px;}
+.cap-act{display:flex; align-items:center; gap:10px; flex-wrap:wrap; margin-top:9px;
+  padding-top:9px; border-top:1px dashed var(--rule);}
+.cap-act .meta{margin-right:auto;}
+b.over{color:var(--red);}
+
 /* attachments */
 .attach{margin-top:12px; border-top:1px dashed var(--rule); padding-top:10px;}
 .attach-hd{display:flex; align-items:center; gap:8px; flex-wrap:wrap; margin-bottom:6px;}
@@ -1023,12 +1060,13 @@ function RepairBoard() {
   );
 
   const counts = useMemo(() => {
-    const c = { open: repairs.length, active: 0, mine: 0, free: 0, truck: 0, trailer: 0, stale: 0, overdue: 0, hire: 0, partner: 0 };
+    const c = { open: repairs.length, active: 0, mine: 0, free: 0, truck: 0, trailer: 0, stale: 0, overdue: 0, hire: 0, partner: 0, capFlag: 0 };
     repairs.forEach((r) => {
       if (r.unitType === "Trailer") c.trailer++;
       else c.truck++;
       if (onHire(r)) c.hire++;
       if (onPartner(r)) c.partner++;
+      if (partnerFlagged(r)) c.capFlag++;
       if (!isParked(r)) {
         c.active++;
         if (isMine(r, prefs.name)) c.mine++;
@@ -1341,6 +1379,9 @@ function RepairBoard() {
           <div className={"stat" + (dupCount ? " bad" : "")} title="Same unit number on the board more than once"><b>{dupCount}</b><s>Duplicates</s></div>
           <div className="stat"><b>{counts.hire}</b><s>Leased / rented</s></div>
           <div className="stat" title="Trailers down while out with a partner carrier"><b>{counts.partner}</b><s>With partners</s></div>
+          <div className={"stat" + (counts.capFlag ? " bad" : "")} title={"Partner carrier repairs over the " + money(PARTNER_CAP) + " cap awaiting approval"}>
+            <b>{counts.capFlag}</b><s>Over {money(PARTNER_CAP)}</s>
+          </div>
           <div className={"stat" + (counts.overdue ? " bad" : counts.stale ? " warn" : "")}>
             <b>{counts.stale} / {counts.overdue}</b>
             <s>No touch 24h / 48h</s>
@@ -1896,11 +1937,26 @@ function Attachments({ r, me, onPatch }) {
         setBusy({ name: f.name, pct: 0 });
         try {
           const up = await window.uploadRepairFile(f, (pct) => setBusy({ name: f.name, pct }));
+          /* an invoice on a partner carrier's trailer has to be checked
+             against the $150 cap, so capture the total as it's filed */
+          let amount = 0;
+          if (kind === "invoice" && onPartner(r)) {
+            const typed = window.prompt(
+              "Invoice total for " + f.name + "?\n\n" +
+                "Partner carrier repairs are pre-approved up to " + money(PARTNER_CAP) +
+                ". Anything above gets flagged for approval.\n\nNumbers only — leave blank to skip.",
+              ""
+            );
+            const n = Number(String(typed == null ? "" : typed).replace(/[^0-9.]/g, ""));
+            if (isFinite(n) && n > 0) amount = n;
+          }
           onPatch((cur) => ({
             files: [
               ...(cur.files || []),
-              { id: uid("f"), kind, name: up.name, size: up.size, mime: up.mime, url: up.url, path: up.path, at: nowISO(), by: me || "" },
+              { id: uid("f"), kind, name: up.name, size: up.size, mime: up.mime, url: up.url, path: up.path, at: nowISO(), by: me || "", amount },
             ],
+            /* the highest invoice logged is what the cap is judged against */
+            ...(amount > 0 ? { partnerCost: Math.max(amount, Number(cur.partnerCost) || 0) } : {}),
           }));
         } catch (ex) {
           const code = ex && ex.code;
@@ -1940,6 +1996,9 @@ function Attachments({ r, me, onPatch }) {
           {invoices.map((f) => (
             <span className="doc" key={f.id}>
               📄 <a href={f.url} target="_blank" rel="noreferrer">{f.name}</a>
+              {f.amount > 0 && (
+                <b className={f.amount > PARTNER_CAP && onPartner(r) ? "over" : ""}>{money(f.amount)}</b>
+              )}
               <span className="meta">{fmtSize(f.size)}{f.by ? " · " + f.by : ""}</span>
               <button className="fx" title="Remove" onClick={() => remove(f)}>×</button>
             </span>
@@ -2019,6 +2078,19 @@ function Row({ r, dup, status, statuses, vendors, defaultMinutes, me, expanded, 
         )}
         {r.safeToDrive === false && (
           <span className="chip alert" title="Marked not safe to drive">🚫 Not safe to drive</span>
+        )}
+        {partnerFlagged(r) && (
+          <span
+            className="chip alert"
+            title={
+              invoiceTotal(r) > PARTNER_CAP
+                ? "Invoice is " + money(invoiceTotal(r)) + " — over the " + money(PARTNER_CAP) + " partner carrier cap"
+                : "Not confirmed to be within the " + money(PARTNER_CAP) + " partner carrier cap"
+            }
+          >
+            ⚠ Over {money(PARTNER_CAP)}
+            {invoiceTotal(r) > PARTNER_CAP ? " · " + money(invoiceTotal(r)) : ""}
+          </span>
         )}
         {prioOf(r) < 3 && (
           <span className={"chip prio " + (prioOf(r) === 1 ? "alert" : "wait")} title={"Priority " + prioOf(r) + " — " + PRIO_LABEL[prioOf(r)]}>
@@ -2212,6 +2284,20 @@ function Row({ r, dup, status, statuses, vendors, defaultMinutes, me, expanded, 
                 />
               </div>
             )}
+            {tracksOwnership(r) && onPartner(r) && (
+              <div>
+                <label className="lab">Invoice total (once known)</label>
+                <input
+                  className="inp mono"
+                  type="number"
+                  min="0"
+                  step="0.01"
+                  value={r.partnerCost == null || r.partnerCost === "" ? "" : r.partnerCost}
+                  placeholder="0.00"
+                  onChange={(e) => onPatch({ partnerCost: e.target.value === "" ? "" : Number(e.target.value) })}
+                />
+              </div>
+            )}
             <div>
               <label className="lab">Date reported</label>
               <input
@@ -2298,6 +2384,77 @@ function Row({ r, dup, status, statuses, vendors, defaultMinutes, me, expanded, 
               />
             </div>
           </div>
+
+          {onPartner(r) && (
+            <div
+              className={
+                "cap " +
+                (partnerFlagged(r) ? "is-flagged" : partnerCleared(r) ? "is-cleared" : r.partnerCapOk ? "is-ok" : "is-unset")
+              }
+            >
+              <div className="cap-hd">
+                <h6>Partner carrier — {money(PARTNER_CAP)} rule</h6>
+                <span className="cap-state">
+                  {partnerFlagged(r)
+                    ? "⚠ Over " + money(PARTNER_CAP) + " — needs approval"
+                    : partnerCleared(r)
+                    ? "✓ Overage approved by " + r.partnerApprovedBy
+                    : r.partnerCapOk
+                    ? "✓ Within the cap"
+                    : "Not confirmed yet"}
+                </span>
+              </div>
+              <label className="meta cap-check">
+                <input
+                  type="checkbox"
+                  checked={r.partnerCapOk === true}
+                  onChange={(e) => onPatch({ partnerCapOk: e.target.checked })}
+                />
+                <span>
+                  This repair is <b>{money(PARTNER_CAP)} or less</b> — pre-approved under the partner carrier agreement.
+                </span>
+              </label>
+              {invoiceTotal(r) > 0 && (
+                <div className="meta" style={{ marginTop: 7 }}>
+                  Invoice logged at <b className={invoiceTotal(r) > PARTNER_CAP ? "over" : ""}>{money(invoiceTotal(r))}</b>
+                  {invoiceTotal(r) > PARTNER_CAP
+                    ? " — " + money(invoiceTotal(r) - PARTNER_CAP) + " over the cap."
+                    : " — within the cap."}
+                </div>
+              )}
+              {partnerFlagged(r) && (
+                <div className="cap-act">
+                  <span className="meta">
+                    Hold the repair until someone signs off on the extra spend.
+                  </span>
+                  <button
+                    className="btn sm"
+                    onClick={() =>
+                      me
+                        ? onPatch({ partnerApprovedBy: me, partnerApprovedAt: nowISO() })
+                        : onNeedName()
+                    }
+                  >
+                    Approve the overage
+                  </button>
+                </div>
+              )}
+              {partnerCleared(r) && (
+                <div className="cap-act">
+                  <span className="meta">
+                    Approved by <b>{r.partnerApprovedBy}</b>
+                    {r.partnerApprovedAt ? " · " + stamp(r.partnerApprovedAt) : ""}
+                  </span>
+                  <button
+                    className="btn alt sm"
+                    onClick={() => onPatch({ partnerApprovedBy: "", partnerApprovedAt: "" })}
+                  >
+                    Undo approval
+                  </button>
+                </div>
+              )}
+            </div>
+          )}
 
           <Attachments r={r} me={me} onPatch={onPatch} />
 
@@ -3072,7 +3229,7 @@ function Archive({ archive, vendors, onRestore, onPurge, onClose }) {
 function ExportCsv({ repairs, archive, vendorOf, statusOf, onClose }) {
   const [copied, setCopied] = useState(false);
   const csv = useMemo(() => {
-    const head = ["Location", "Breakdown location", "Shop", "Shop address", "POC", "Priority", "Unit type", "Unit number", "Ownership", "Lessor / rental co", "Partner carrier", "Issue", "Status", "Approved by", "Requested by", "Driver who reported", "Safe to drive", "Loaded trailer", "Delivery", "Reported", "Last follow-up", "Follow-ups", "Claimed by", "Reminder due", "Parked", "Files", "Hours down", "Repaired"];
+    const head = ["Location", "Breakdown location", "Shop", "Shop address", "POC", "Priority", "Unit type", "Unit number", "Ownership", "Lessor / rental co", "Partner carrier", "Invoice total", "Within $150 cap", "Overage approved by", "Issue", "Status", "Approved by", "Requested by", "Driver who reported", "Safe to drive", "Loaded trailer", "Delivery", "Reported", "Last follow-up", "Follow-ups", "Claimed by", "Reminder due", "Parked", "Files", "Hours down", "Repaired"];
     const esc = (v) => '"' + String(v == null ? "" : v).replace(/"/g, '""') + '"';
     const line = (r, done) =>
       [
@@ -3087,6 +3244,9 @@ function ExportCsv({ repairs, archive, vendorOf, statusOf, onClose }) {
         ownOf(r),
         r.lessor || "",
         onPartner(r) ? partnerName(r) || "YES" : "",
+        invoiceTotal(r) > 0 ? invoiceTotal(r).toFixed(2) : "",
+        onPartner(r) ? (partnerFlagged(r) ? "FLAGGED — over" : r.partnerCapOk ? "YES" : partnerCleared(r) ? "over, approved" : "not confirmed") : "",
+        r.partnerApprovedBy || "",
         r.issue,
         statusOf(r.statusId).label,
         r.approver || "",
