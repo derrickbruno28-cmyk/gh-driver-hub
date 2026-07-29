@@ -306,6 +306,11 @@ function countdown(iso) {
   return past ? "over by " + body : body;
 }
 const inMinutes = (m) => new Date(Date.now() + m * 60000).toISOString();
+const minLabel = (m) => {
+  const p = PRESETS.find((x) => x.m === m);
+  if (p) return p.label;
+  return m >= 60 && m % 60 === 0 ? m / 60 + " hr" : m + " min";
+};
 
 const uid = (p) => p + "-" + Math.random().toString(36).slice(2, 9);
 const nowISO = () => new Date().toISOString();
@@ -1091,7 +1096,8 @@ function RepairBoard() {
   const applySet = (r, s) => {
     if (!s || s.clear) return { ...r, dueAt: null, parked: false, dueAck: false };
     if (s.at) return { ...r, dueAt: s.at, parked: !!s.park, dueAck: false };
-    if (s.minutes) return { ...r, dueAt: inMinutes(s.minutes), parked: false, dueAck: false };
+    /* remember the interval so the unit can be re-timed in one click */
+    if (s.minutes) return { ...r, dueAt: inMinutes(s.minutes), lastMinutes: s.minutes, parked: false, dueAck: false };
     return { ...r, dueAt: null, parked: false, dueAck: false };
   };
   const setTimer = (id, s) =>
@@ -1736,7 +1742,7 @@ function ClaimChip({ r, me, team = [], onClaim, onRelease, onNeedName, onAddName
 
 /* --------------------------- timer control ------------------------ */
 
-function TimerButton({ label, state = "none", onSet, compact, canPark = true }) {
+function TimerButton({ label, state = "none", onSet, compact, canPark = true, restartMinutes }) {
   const [open, setOpen] = useState(false);
   const [mins, setMins] = useState("");
   const [at, setAt] = useState("");
@@ -1787,6 +1793,14 @@ function TimerButton({ label, state = "none", onSet, compact, canPark = true }) 
       </button>
       {open && (
         <span className="pmenu">
+          {restartMinutes > 0 && (
+            <>
+              <span className="pmenu-lab">Restart</span>
+              <button className="full go" onClick={() => pickMinutes(restartMinutes)}>
+                ↻ Start over — {minLabel(restartMinutes)}
+              </button>
+            </>
+          )}
           <span className="pmenu-lab">Later today</span>
           {PRESETS.map((p) => (
             <button key={p.m} onClick={() => pickMinutes(p.m)}>{p.label}</button>
@@ -1953,6 +1967,9 @@ function Row({ r, dup, status, statuses, vendors, defaultMinutes, me, expanded, 
   const [editIdx, setEditIdx] = useState(null); // which follow-up is being edited
   const [editTxt, setEditTxt] = useState("");
   const noteRef = useRef(null);
+  /* the interval a reset goes back to: whatever was used last on this unit,
+     otherwise your default */
+  const restartMin = Number(r.lastMinutes) > 0 ? Number(r.lastMinutes) : Number(defaultMinutes) || 30;
 
   /* "Log follow-up" opens the note box rather than logging a blank entry —
      the point of the button is to write down what you were told */
@@ -2064,7 +2081,17 @@ function Row({ r, dup, status, statuses, vendors, defaultMinutes, me, expanded, 
             label={ds === "none" ? "Set reminder" : parked ? fmtDueShort(r.dueAt) : countdown(r.dueAt)}
             state={ds === "due" ? "ring" : parked ? "parked" : ds === "pending" ? "pending" : "none"}
             onSet={onTimer}
+            restartMinutes={restartMin}
           />
+          {ds !== "none" && !parked && (
+            <button
+              className="btn alt sm"
+              title={"Restart the countdown — " + minLabel(restartMin) + " from now"}
+              onClick={() => onTimer({ minutes: restartMin })}
+            >
+              ↻ Reset
+            </button>
+          )}
           {ds === "due" && !r.dueAck && (
             <button className="btn alt sm" onClick={onSilence}>Silence</button>
           )}
