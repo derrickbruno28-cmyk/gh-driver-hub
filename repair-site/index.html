@@ -319,6 +319,10 @@ const OWN_CLASS = { GH: "gh", Leased: "leased", Rented: "rented" };
 const tracksOwnership = (r) => r.unitType === "Trailer";
 const ownOf = (r) => (tracksOwnership(r) && OWNERSHIP.includes(r.ownership) ? r.ownership : "GH");
 const onHire = (r) => ownOf(r) !== "GH";
+/* a trailer can be out with a partner carrier regardless of who owns it,
+   so this is its own flag rather than a fourth ownership value */
+const onPartner = (r) => tracksOwnership(r) && !!r.partner;
+const partnerName = (r) => (r.partnerCarrier || "").trim();
 
 /* who's handling it */
 const claimedBy = (r) => (r.claimedBy || "").trim();
@@ -838,6 +842,7 @@ const CSS = `
 .own.gh{background:var(--ink); color:#fff;}
 .own.leased{background:#fff; color:var(--ink-2); border:1px dashed #9FB0C0;}
 .own.rented{background:#E8F0EC; color:var(--green); border:1px solid #B9D3C6;}
+.own.partner{background:#F2E9F7; color:#6B3E93; border:1px solid #D8C2E8;}
 .issue{color:var(--ink-2); flex:1 1 260px; min-width:180px;}
 .chip{font-size:11.5px; font-weight:500; padding:3px 9px; border-radius:2px; white-space:nowrap;}
 .chip.neutral{background:#EAEEF2; color:#3D4C5B;}
@@ -1132,7 +1137,8 @@ function RepairBoard() {
       if (!needle && isParked(r)) return false;
       if (city !== "All" && r.city !== city) return false;
       if (kind !== "All" && r.unitType !== kind) return false;
-      if (own !== "All" && (!tracksOwnership(r) || ownOf(r) !== own)) return false;
+      if (own === "Partner" && !onPartner(r)) return false;
+      if (own !== "All" && own !== "Partner" && (!tracksOwnership(r) || ownOf(r) !== own)) return false;
       if (whose === "Mine" && !isMine(r, prefs.name)) return false;
       if (whose === "Free" && claimedBy(r)) return false;
       if (whose !== "All" && whose !== "Mine" && whose !== "Free" && claimedBy(r) !== whose) return false;
@@ -1156,11 +1162,12 @@ function RepairBoard() {
   );
 
   const counts = useMemo(() => {
-    const c = { open: repairs.length, active: 0, mine: 0, free: 0, truck: 0, trailer: 0, stale: 0, overdue: 0, hire: 0 };
+    const c = { open: repairs.length, active: 0, mine: 0, free: 0, truck: 0, trailer: 0, stale: 0, overdue: 0, hire: 0, partner: 0 };
     repairs.forEach((r) => {
       if (r.unitType === "Trailer") c.trailer++;
       else c.truck++;
       if (onHire(r)) c.hire++;
+      if (onPartner(r)) c.partner++;
       if (!isParked(r)) {
         c.active++;
         if (isMine(r, prefs.name)) c.mine++;
@@ -1560,6 +1567,7 @@ function RepairBoard() {
           <div className="stat"><b>{counts[OTR]}</b><s>On the road</s></div>
           <div className={"stat" + (dupCount ? " bad" : "")} title="Same unit number on the board more than once"><b>{dupCount}</b><s>Duplicates</s></div>
           <div className="stat"><b>{counts.hire}</b><s>Leased / rented</s></div>
+          <div className="stat" title="Trailers down while out with a partner carrier"><b>{counts.partner}</b><s>With partners</s></div>
           <div className={"stat" + (counts.overdue ? " bad" : counts.stale ? " warn" : "")}>
             <b>{counts.stale} / {counts.overdue}</b>
             <s>No touch 24h / 48h</s>
@@ -1601,6 +1609,7 @@ function RepairBoard() {
           <option value="GH">GH trailers</option>
           <option value="Leased">Leased trailers</option>
           <option value="Rented">Rented trailers</option>
+          <option value="Partner">With a partner carrier</option>
         </select>
         <input className="inp search" placeholder="Search unit, shop, issue…" value={q} onChange={(e) => setQ(e.target.value)} />
       </div>
@@ -2319,6 +2328,19 @@ function Row({ r, dup, status, statuses, vendors, defaultMinutes, me, expanded, 
   const [closing, setClosing] = useState(false);
   const [editIdx, setEditIdx] = useState(null); // which follow-up is being edited
   const [editTxt, setEditTxt] = useState("");
+  const noteRef = useRef(null);
+
+  /* "Log follow-up" opens the note box rather than logging a blank entry —
+     the point of the button is to write down what you were told */
+  const openNotes = () => {
+    if (!expanded) onToggle();
+    setTimeout(() => {
+      const el = noteRef.current;
+      if (!el) return;
+      el.focus();
+      el.scrollIntoView({ block: "center", behavior: "smooth" });
+    }, 60);
+  };
   const down = hoursSince(r.reportedAt);
   const band = touchBand(r);
   const ds = dueState(r);
@@ -2358,6 +2380,11 @@ function Row({ r, dup, status, statuses, vendors, defaultMinutes, me, expanded, 
         {tracksOwnership(r) && (
           <span className={"own " + OWN_CLASS[ownOf(r)]} title={onHire(r) ? ownOf(r) + (r.lessor ? " from " + r.lessor : "") : "GH-owned trailer"}>
             {OWN_LABEL[ownOf(r)]}
+          </span>
+        )}
+        {onPartner(r) && (
+          <span className="own partner" title={"Out with a partner carrier" + (partnerName(r) ? ": " + partnerName(r) : "")}>
+            PARTNER{partnerName(r) ? " · " + partnerName(r) : ""}
           </span>
         )}
         <span className={"kind " + r.unitType.toLowerCase()}>{r.unitType}</span>
@@ -2421,7 +2448,7 @@ function Row({ r, dup, status, statuses, vendors, defaultMinutes, me, expanded, 
           {ds === "due" && !r.dueAck && (
             <button className="btn alt sm" onClick={onSilence}>Silence</button>
           )}
-          <button className="btn alt sm" onClick={() => onFollowUp("", Number(nextMin) || 0)}>Log follow-up</button>
+          <button className="btn alt sm" onClick={openNotes} title="Open the notes for this unit">Log follow-up</button>
           {onUnpark && parked && (
             <button className="btn alt sm" onClick={onUnpark} title="Put it back on the active board now">
               Back on board
@@ -2507,6 +2534,28 @@ function Row({ r, dup, status, statuses, vendors, defaultMinutes, me, expanded, 
                   placeholder="XTRA Lease"
                   onChange={(e) => onPatch({ lessor: e.target.value })}
                 />
+              </div>
+            )}
+            {tracksOwnership(r) && (
+              <div>
+                <label className="lab">Partner carrier</label>
+                <label className="meta" style={{ display: "flex", gap: 6, alignItems: "center", marginTop: 6 }}>
+                  <input
+                    type="checkbox"
+                    checked={!!r.partner}
+                    onChange={(e) => onPatch(e.target.checked ? { partner: true } : { partner: false, partnerCarrier: "" })}
+                  />
+                  <span>In use by a partner carrier</span>
+                </label>
+                {r.partner && (
+                  <input
+                    className="inp"
+                    style={{ marginTop: 7 }}
+                    value={r.partnerCarrier || ""}
+                    placeholder="Carrier name"
+                    onChange={(e) => onPatch({ partnerCarrier: e.target.value })}
+                  />
+                )}
               </div>
             )}
             <div>
@@ -2605,7 +2654,13 @@ function Row({ r, dup, status, statuses, vendors, defaultMinutes, me, expanded, 
 
           <div style={{ marginTop: 12 }}>
             <label className="lab">Add a follow-up note</label>
-            <textarea className="ta" value={note} placeholder="Who you spoke with, what they promised, ETA…" onChange={(e) => setNote(e.target.value)} />
+            <textarea
+              className="ta"
+              ref={noteRef}
+              value={note}
+              placeholder="Who you spoke with, what they promised, ETA…"
+              onChange={(e) => setNote(e.target.value)}
+            />
             <div className="foot">
               {!closing ? (
                 <>
@@ -2737,6 +2792,8 @@ function AddRepair({ vendors, statuses, defaultMinutes, existingUnits, onAddVend
   const [unitNumber, setUnit] = useState("");
   const [ownership, setOwnership] = useState("GH");
   const [lessor, setLessor] = useState("");
+  const [partner, setPartner] = useState(false);
+  const [partnerCarrier, setPartnerCarrier] = useState("");
   const [issue, setIssue] = useState("");
   const [priority, setPriority] = useState(3);
   const [requestedBy, setRequestedBy] = useState("");
@@ -2786,6 +2843,8 @@ function AddRepair({ vendors, statuses, defaultMinutes, existingUnits, onAddVend
       unitNumber: unitNumber.trim().toUpperCase(),
       ownership: unitType === "Trailer" ? ownership : "GH",
       lessor: unitType === "Trailer" && ownership !== "GH" ? lessor.trim() : "",
+      partner: unitType === "Trailer" ? partner : false,
+      partnerCarrier: unitType === "Trailer" && partner ? partnerCarrier.trim() : "",
       issue: issue.trim(),
       poc: poc.trim(),
       priority,
@@ -2838,6 +2897,23 @@ function AddRepair({ vendors, statuses, defaultMinutes, existingUnits, onAddVend
         <div className="field">
           <label className="lab">{ownership === "Rented" ? "Rental company" : "Lessor"}</label>
           <input className="inp" value={lessor} placeholder="XTRA Lease" onChange={(e) => setLessor(e.target.value)} />
+        </div>
+      )}
+      {unitType === "Trailer" && (
+        <div className="field">
+          <label className="meta" style={{ display: "flex", gap: 6, alignItems: "center" }}>
+            <input type="checkbox" checked={partner} onChange={(e) => setPartner(e.target.checked)} />
+            <span>This trailer is in use by a partner carrier</span>
+          </label>
+          {partner && (
+            <input
+              className="inp"
+              style={{ marginTop: 8 }}
+              value={partnerCarrier}
+              placeholder="Partner carrier name"
+              onChange={(e) => setPartnerCarrier(e.target.value)}
+            />
+          )}
         </div>
       )}
       <div className="grid2">
@@ -3412,7 +3488,10 @@ function Archive({ archive, vendors, onRestore, onPurge, onClose }) {
             <div className="list-row" key={r.id}>
               <div>
                 <div className="nm mono">{r.unitNumber} <span style={{ fontWeight: 400 }}>· {tracksOwnership(r) ? ownOf(r) + " " : ""}{r.unitType} · {r.city}{r.location ? " (" + r.location + ")" : ""}</span></div>
-                <div className="sub">{vname(r.vendorId)}{r.lessor ? " · " + r.lessor : ""} — {r.issue}</div>
+                <div className="sub">
+                  {vname(r.vendorId)}{r.lessor ? " · " + r.lessor : ""}
+                  {onPartner(r) ? " · partner: " + (partnerName(r) || "yes") : ""} — {r.issue}
+                </div>
                 <div className="sub mono">
                   reported {stampDate(r.reportedAt)} · repaired {stamp(r.repairedAt)}
                   {r.closeNote ? " · " + r.closeNote : ""}
@@ -3433,7 +3512,7 @@ function Archive({ archive, vendors, onRestore, onPurge, onClose }) {
 function ExportCsv({ repairs, archive, vendorOf, statusOf, onClose }) {
   const [copied, setCopied] = useState(false);
   const csv = useMemo(() => {
-    const head = ["Location", "Breakdown location", "Shop", "Shop address", "POC", "Priority", "Unit type", "Unit number", "Ownership", "Lessor / rental co", "Issue", "Status", "Approved by", "Requested by", "Driver who reported", "Safe to drive", "Loaded trailer", "Delivery", "Reported", "Last follow-up", "Follow-ups", "Claimed by", "Reminder due", "Parked", "Plan status", "Plan of action", "Plan approved by", "Files", "Hours down", "Repaired"];
+    const head = ["Location", "Breakdown location", "Shop", "Shop address", "POC", "Priority", "Unit type", "Unit number", "Ownership", "Lessor / rental co", "Partner carrier", "Issue", "Status", "Approved by", "Requested by", "Driver who reported", "Safe to drive", "Loaded trailer", "Delivery", "Reported", "Last follow-up", "Follow-ups", "Claimed by", "Reminder due", "Parked", "Plan status", "Plan of action", "Plan approved by", "Files", "Hours down", "Repaired"];
     const esc = (v) => '"' + String(v == null ? "" : v).replace(/"/g, '""') + '"';
     const line = (r, done) =>
       [
@@ -3447,6 +3526,7 @@ function ExportCsv({ repairs, archive, vendorOf, statusOf, onClose }) {
         r.unitNumber,
         ownOf(r),
         r.lessor || "",
+        onPartner(r) ? partnerName(r) || "YES" : "",
         r.issue,
         statusOf(r.statusId).label,
         r.approver || "",
