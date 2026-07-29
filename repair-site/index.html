@@ -223,7 +223,7 @@ const prioOf = (r) => ([1, 2, 3].includes(Number(r.priority)) ? Number(r.priorit
 const OWNERSHIP = ["GH", "Leased", "Rented", "Partner"];
 const OWN_LABEL = { GH: "GH", Leased: "Leased", Rented: "Rented", Partner: "Partner" };
 const OWN_CLASS = { GH: "gh", Leased: "leased", Rented: "rented", Partner: "partner" };
-const OWN_OPTION = { GH: "GH-owned", Leased: "Leased", Rented: "Rented", Partner: "With a partner carrier" };
+const OWN_OPTION = { GH: "GH-owned", Leased: "Leased", Rented: "Rented", Partner: "Partner Carrier" };
 /* trucks are all company-owned, so ownership is a trailer-only field */
 const tracksOwnership = (r) => r.unitType === "Trailer";
 const ownOf = (r) => (tracksOwnership(r) && OWNERSHIP.includes(r.ownership) ? r.ownership : "GH");
@@ -1382,7 +1382,7 @@ function RepairBoard() {
           <option value="GH">GH trailers</option>
           <option value="Leased">Leased trailers</option>
           <option value="Rented">Rented trailers</option>
-          <option value="Partner">With a partner carrier</option>
+          <option value="Partner">Partner Carrier</option>
         </select>
         <input className="inp search" placeholder="Search unit, shop, issue…" value={q} onChange={(e) => setQ(e.target.value)} />
       </div>
@@ -2539,7 +2539,7 @@ function AddRepair({ vendors, statuses, defaultMinutes, existingUnits, onAddVend
           <div className="seg-ctl">
             {OWNERSHIP.map((o) => (
               <button key={o} aria-pressed={ownership === o} onClick={() => setOwnership(o)}>
-                {o === "Partner" ? "Partner carrier" : OWN_OPTION[o]}
+                {OWN_OPTION[o]}
               </button>
             ))}
           </div>
