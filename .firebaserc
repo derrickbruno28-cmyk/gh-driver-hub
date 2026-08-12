@@ -5,8 +5,7 @@
   "targets": {
     "ghlogistics-driver-hub": {
       "hosting": {
-        "hub": ["ghlogistics-driver-hub"],
-        "repair": ["fleet-repair-ctdashboard"]
+        "hub": ["ghlogistics-driver-hub"]
       }
     }
   }

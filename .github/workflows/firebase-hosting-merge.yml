@@ -1,9 +1,12 @@
-# Auto-deploy both sites to Firebase Hosting whenever code lands on `main`.
-# This replaces the old "push to main -> Netlify deploys" flow.
+# Auto-deploy the Driver Hub to Firebase Hosting whenever code lands on `main`.
+# This replaced the old "push to main -> Netlify deploys" flow.
 #
-# Two sites, one project (ghlogistics-driver-hub):
-#   hub    -> public/       -> https://ghlogistics-driver-hub.firebaseapp.com
-#   repair -> repair-site/  -> https://fleet-repair-ctdashboard.firebaseapp.com
+#   hub -> public/ -> https://ghlogistics-driver-hub.firebaseapp.com
+#
+# The Repair CT Dashboard was retired on 2026-08-12. Its hosting site
+# (fleet-repair-ctdashboard) is no longer deployed to and now serves a
+# retirement notice; the app source is kept at
+# archive/repair-ct-dashboard/index.html.
 #
 # One-time setup (done in web consoles, no terminal needed):
 #   1. Firebase console -> Project settings -> Service accounts ->
@@ -26,19 +29,6 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      # One-time, then a no-op: make sure the repair dashboard's hosting
-      # site exists before deploying to it.
-      - name: Ensure fleet-repair-ctdashboard site exists
-        env:
-          SA_JSON: ${{ secrets.FIREBASE_SERVICE_ACCOUNT_GHLOGISTICS }}
-        run: |
-          printf '%s' "$SA_JSON" > "$RUNNER_TEMP/sa.json"
-          export GOOGLE_APPLICATION_CREDENTIALS="$RUNNER_TEMP/sa.json"
-          npx firebase-tools@13 hosting:sites:create fleet-repair-ctdashboard \
-            --project ghlogistics-driver-hub \
-            || echo "Site already exists - nothing to do."
-          rm -f "$RUNNER_TEMP/sa.json"
-
       - name: Deploy Driver Hub
         uses: FirebaseExtended/action-hosting-deploy@v0
         with:
@@ -47,12 +37,3 @@ jobs:
           channelId: live
           projectId: ghlogistics-driver-hub
           target: hub
-
-      - name: Deploy Repair CT Dashboard
-        uses: FirebaseExtended/action-hosting-deploy@v0
-        with:
-          repoToken: ${{ secrets.GITHUB_TOKEN }}
-          firebaseServiceAccount: ${{ secrets.FIREBASE_SERVICE_ACCOUNT_GHLOGISTICS }}
-          channelId: live
-          projectId: ghlogistics-driver-hub
-          target: repair

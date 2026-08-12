@@ -10,17 +10,6 @@
           "destination": "/index.html"
         }
       ]
-    },
-    {
-      "target": "repair",
-      "public": "repair-site",
-      "ignore": ["firebase.json", "**/.*", "**/node_modules/**"],
-      "rewrites": [
-        {
-          "source": "**",
-          "destination": "/index.html"
-        }
-      ]
     }
   ]
 }

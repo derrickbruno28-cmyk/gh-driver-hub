@@ -34,27 +34,39 @@ no build step). It uses **Firebase** as its backend and falls back to browser
 
 ## Project structure
 
-Two sites deploy from this repo (both on the same Firebase project):
+One site deploys from this repo:
 
 | Site | Folder | Live URL |
 |---|---|---|
 | Driver Hub | `public/` | https://ghlogistics-driver-hub.firebaseapp.com |
-| Repair CT Dashboard | `repair-site/` | https://fleet-repair-ctdashboard.firebaseapp.com |
 
 ```
 .
 ├── public/
 │   ├── index.html      # Driver Hub (HTML/CSS/JS in one file)
 │   └── repair/
-│       └── index.html  # redirect stub to the Repair CT Dashboard's URL
-├── repair-site/
-│   └── index.html      # Repair CT Dashboard (repair board, self-contained)
+│       └── index.html  # retirement notice for the old Repair CT Dashboard
+├── archive/
+│   └── repair-ct-dashboard/
+│       └── index.html  # retired Repair CT Dashboard, kept for reference
 ├── netlify.toml        # Legacy Netlify config (retired)
-├── firebase.json       # Firebase Hosting config (both sites, via targets)
+├── firebase.json       # Firebase Hosting config
 ├── .firebaserc         # Firebase project + hosting-target mapping
 ├── package.json        # Convenience scripts
 └── README.md
 ```
+
+### Retired: Repair CT Dashboard
+
+The repair board was taken out of service on **2026-08-12**. It is no longer
+built or deployed, and `fleet-repair-ctdashboard.firebaseapp.com` serves a
+retirement notice. Its source is preserved at
+`archive/repair-ct-dashboard/index.html`.
+
+Its data was **not** deleted — the board record still lives in Firestore at
+`repairBoard/fleet-repair-board-v1`, and uploaded invoices, receipts, photos
+and videos remain in Storage under `driverDocs/`. Delete those in the Firebase
+console if you want them gone.
 
 ## Deployment
 
